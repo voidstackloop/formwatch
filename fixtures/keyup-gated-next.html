@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Keyup-gated Next</title></head>
+<body>
+  <h1>Permit Application</h1>
+  <form>
+    <div class="step" data-step="1">
+      <label for="fullname">Full name</label>
+      <input id="fullname" name="fullname" type="text" required>
+      <!-- Disabled until a keyup listener re-enables it — a real
+           vanilla-JS pattern (char-counters, "enable on type"). -->
+      <button type="button" id="nextBtn" disabled>Next</button>
+    </div>
+    <div class="step" data-step="2" hidden>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required>
+      <button type="submit">Submit</button>
+    </div>
+  </form>
+  <script>
+    const fullname = document.getElementById('fullname');
+    const nextBtn = document.getElementById('nextBtn');
+    fullname.addEventListener('keyup', () => {
+      nextBtn.disabled = fullname.value.trim().length === 0;
+    });
+    nextBtn.addEventListener('click', () => {
+      document.querySelector('[data-step="1"]').hidden = true;
+      document.querySelector('[data-step="2"]').hidden = false;
+    });
+  </script>
+</body>
+</html>

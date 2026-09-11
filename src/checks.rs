@@ -107,6 +107,12 @@ async fn fill_form_fields(page: &Page) -> Result<usize> {
                     }}
                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    // A Next/submit button gated on keydown/keyup (a
+                    // char-counter, an "enable on type" listener) rather
+                    // than input/change would otherwise look stuck even
+                    // though the form works fine for a real user typing.
+                    el.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true }}));
+                    el.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true }}));
                     count += 1;
                 }}
                 return count;

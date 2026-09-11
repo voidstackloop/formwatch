@@ -241,6 +241,26 @@ async fn aria_required_only_fields_get_a_warn_not_a_false_pass() {
 }
 
 #[tokio::test]
+async fn keyup_gated_next_button_is_enabled_by_filling_the_field() {
+    // fixtures/keyup-gated-next.html's Next button starts disabled and
+    // is only re-enabled by a `keyup` listener on the text field.
+    // Regression test for a bug where formwatch only dispatched
+    // input/change events, so a real, working form using this common
+    // vanilla-JS pattern (char-counters, "enable on type") looked
+    // permanently stuck.
+    let (_browser, page, _handle) = open_fixture("keyup-gated-next.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow");
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("Advanced through 1 step"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn multi_step_wizard_real_submit_reaches_the_thank_you_page() {
     let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
     let result = checks::check_submission_flow(&page, true)

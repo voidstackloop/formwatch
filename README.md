@@ -137,10 +137,6 @@ not deployed.
   language won't be walked past the first step — it'll report "found no
   Next/Continue or submit button" even though the form works fine for a
   real user in that language.
-- Dummy field values are filled via `input`/`change` events only, not
-  real keystrokes. A Next/submit button gated on a `keyup`/`keydown`
-  listener (rather than `input`/`change`) will look stuck to formwatch
-  even though the form works fine for a real user typing into it.
 - Every check operates on regular DOM (`document.querySelectorAll`).
   Content inside a Shadow DOM or an `<iframe>` is invisible — a form
   built with web components will report "No `<form>` element found"
