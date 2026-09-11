@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sample Permit Application</title>
+<style>
+  body { font-family: sans-serif; width: 1000px; }
+  .tiny-btn { width: 20px; height: 20px; font-size: 8px; }
+</style>
+</head>
+<body>
+  <h1>Permit Application</h1>
+  <img src="logo.png">
+  <form id="permit-form" action="javascript:void(0)">
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text" autocomplete="name" required>
+
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required>
+
+    <label for="unlabeled">No visible label field</label>
+    <input id="unlabeled" name="unlabeled" type="text" required aria-invalid="false">
+
+    <label for="permit-type">Permit type</label>
+    <select id="permit-type" name="permit-type">
+      <option value="">Choose one</option>
+      <option value="residential">Residential</option>
+      <option value="commercial">Commercial</option>
+    </select>
+
+    <label for="appointment">Appointment date</label>
+    <input id="appointment" name="appointment" type="date" min="2030-01-01" required>
+
+    <label><input type="checkbox" name="agree" required> I agree to the terms</label>
+
+    <p>Required documents: please upload a scan of your ID.</p>
+    <input type="file" name="id_scan">
+
+    <button class="tiny-btn" type="submit">Go</button>
+  </form>
+  <script>
+    document.getElementById('permit-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.body.innerHTML += '<p>Thank you, your application was received.</p>';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Multi-step Permit Application</title>
+</head>
+<body>
+  <h1>Permit Application</h1>
+  <form id="wizard">
+    <div class="step" data-step="1">
+      <label for="fullname">Full name</label>
+      <input id="fullname" name="fullname" type="text" required>
+      <button type="button" class="next">Next</button>
+    </div>
+    <div class="step" data-step="2" hidden>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required>
+      <button type="button" class="next">Continue</button>
+    </div>
+    <div class="step" data-step="3" hidden>
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes"></textarea>
+      <button type="submit">Submit application</button>
+    </div>
+  </form>
+  <p class="unrelated-timeout-notice">Note: if your connection times out or a request is timed out, just retry.</p>
+  <script>
+    document.querySelectorAll('.next').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const current = btn.closest('.step');
+        const nextStep = document.querySelector(`.step[data-step="${Number(current.dataset.step) + 1}"]`);
+        current.hidden = true;
+        if (nextStep) nextStep.hidden = false;
+      });
+    });
+    document.getElementById('wizard').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.body.innerHTML = '<p>Thank you, your application was received.</p>';
+    });
+  </script>
+</body>
+</html>

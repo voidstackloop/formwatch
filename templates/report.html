@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>formwatch report</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .meta { color: #666; font-size: 0.85rem; margin-bottom: 2rem; }
+  .form-card { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.5rem; overflow: hidden; }
+  .form-card h2 { margin: 0; padding: 0.75rem 1rem; background: #f5f5f5; font-size: 1.05rem; }
+  .form-card h2 small { color: #666; font-weight: normal; display: block; font-size: 0.8rem; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { padding: 0.6rem 1rem; border-top: 1px solid #eee; text-align: left; font-size: 0.9rem; vertical-align: top; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; color: white; }
+  .badge.pass { background: #2e7d32; }
+  .badge.warn { background: #b26a00; }
+  .badge.fail { background: #c62828; }
+  .changes { padding: 0.5rem 1rem; font-size: 0.85rem; background: #fffbea; border-top: 1px solid #eee; }
+  .changes ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
+</style>
+</head>
+<body>
+<h1>formwatch report</h1>
+<div class="meta">Generated {{ generated_at }}</div>
+
+{% for form in forms %}
+<div class="form-card">
+  <h2>{{ form.run.name }}<small>{{ form.run.url }} &middot; last checked {{ form.when }}</small></h2>
+  <table>
+    <tbody>
+    {% for check in form.run.checks %}
+      <tr>
+        <td><span class="badge {{ check.status.css_class() }}">{{ check.status.label() }}</span></td>
+        <td><strong>{{ check.name }}</strong><br>{{ check.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if !form.changes.is_empty() %}
+  <div class="changes">
+    <strong>Changed since previous run:</strong>
+    <ul>
+    {% for c in form.changes %}
+      <li>{{ c.name }}: {{ c.from.label() }} &rarr; {{ c.to.label() }}</li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<p>No runs recorded yet. Run <code>formwatch test &lt;url&gt;</code> or <code>formwatch monitor forms.yml</code> first.</p>
+{% endfor %}
+
+</body>
+</html>

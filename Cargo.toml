@@ -1,0 +1,21 @@
+[package]
+name = "formwatch"
+version = "0.1.0"
+edition = "2024"
+description = "Tests public-service forms for broken flows, accessibility, mobile usability, and lost input."
+license = "MIT"
+keywords = ["accessibility", "testing", "cli", "civic-tech", "monitoring"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime", "_fetcher-rusttls-tokio"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
+askama = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+owo-colors = "4"

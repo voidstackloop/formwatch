@@ -1,0 +1,43 @@
+name: community-monitor
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC
+  workflow_dispatch: {} # lets a maintainer trigger a run manually
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Chrome is normally already on ubuntu-latest; if not, formwatch's
+      # own fetcher downloads one (see src/browser.rs) — no extra step.
+      #
+      # `|| true`: `monitor` exits 1 whenever any registered form has a
+      # Fail check — the right default for gating a CI job, but here
+      # finding Fails is the normal, expected outcome (real government
+      # forms have real issues), and this step failing would make
+      # GitHub Actions skip the index-build and commit steps below,
+      # silently defeating the entire point of running this on a
+      # schedule. Success for this step means "the check round ran," not
+      # "every form passed" — pass/fail-per-form lives in the dashboard.
+      - name: Run formwatch against every registered form
+        run: |
+          shopt -s globstar
+          cargo run -- --history-dir results monitor community-forms/**/*.yml || true
+
+      - name: Build the dashboard's data index
+        run: cargo run -- --history-dir results report --json --out results/index.json
+
+      - name: Commit updated results
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "formwatch: update community results"
+          file_pattern: results/**

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>formwatch community dashboard</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  p.sub { color: #666; font-size: 0.9rem; }
+  .meta { color: #666; font-size: 0.85rem; margin-bottom: 2rem; }
+  .form-card { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.5rem; overflow: hidden; }
+  .form-card h2 { margin: 0; padding: 0.75rem 1rem; background: #f5f5f5; font-size: 1.05rem; }
+  .form-card h2 small { color: #666; font-weight: normal; display: block; font-size: 0.8rem; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 0.6rem 1rem; border-top: 1px solid #eee; text-align: left; font-size: 0.9rem; vertical-align: top; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; color: white; white-space: nowrap; }
+  .badge.pass { background: #2e7d32; }
+  .badge.warn { background: #b26a00; }
+  .badge.fail { background: #c62828; }
+  #status { color: #666; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>formwatch community dashboard</h1>
+<!-- TODO: link to this repo once it has a real URL -->
+<p class="sub">Public-service forms, checked automatically. See this
+  project's repository for how to add a form or read the results
+  yourself.</p>
+<div id="status">Loading results&hellip;</div>
+<div id="forms"></div>
+
+<script>
+async function main() {
+    const status = document.getElementById('status');
+    const container = document.getElementById('forms');
+    let forms;
+    try {
+        const res = await fetch('results/index.json');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        forms = await res.json();
+    } catch (e) {
+        status.textContent = `Couldn't load results/index.json (${e.message}). Has the monitor workflow run yet?`;
+        return;
+    }
+
+    if (forms.length === 0) {
+        status.textContent = 'No results yet — the scheduled monitor workflow hasn\'t run, or no forms are registered.';
+        return;
+    }
+
+    const severity = (run) => run.checks.some(c => c.status === 'Fail') ? 2
+        : run.checks.some(c => c.status === 'Warn') ? 1 : 0;
+    forms.sort((a, b) => severity(b) - severity(a));
+
+    status.textContent = `${forms.length} form(s), last checked ${new Date(Math.max(...forms.map(f => f.timestamp * 1000))).toLocaleString()}.`;
+
+    for (const form of forms) {
+        const card = document.createElement('div');
+        card.className = 'form-card';
+        const rows = form.checks.map(c => `
+            <tr>
+                <td><span class="badge ${c.status.toLowerCase()}">${c.status}</span></td>
+                <td><strong>${escapeHtml(c.name)}</strong><br>${escapeHtml(c.detail)}</td>
+            </tr>`).join('');
+        card.innerHTML = `
+            <h2>${escapeHtml(form.name)}<small>${escapeHtml(form.url)} &middot; last checked ${new Date(form.timestamp * 1000).toLocaleString()}</small></h2>
+            <table><tbody>${rows}</tbody></table>`;
+        container.appendChild(card);
+    }
+}
+
+function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+main();
+</script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the tag matches Cargo.toml's version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$tag_version" != "$cargo_version" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $cargo_version" >&2
+            exit 1
+          fi
+
+  build:
+    needs: check-version
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive_ext: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          name=formwatch-${{ matrix.target }}
+          mkdir "$name"
+          cp target/${{ matrix.target }}/release/formwatch "$name"/
+          cp README.md LICENSE "$name"/
+          tar czf "$name.tar.gz" "$name"
+
+      - name: Package (windows)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $name = "formwatch-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $name
+          Copy-Item target/${{ matrix.target }}/release/formwatch.exe $name/
+          Copy-Item README.md,LICENSE $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: formwatch-${{ matrix.target }}.${{ matrix.archive_ext }}

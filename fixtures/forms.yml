@@ -1,0 +1,3 @@
+forms:
+  - name: Sample Permit Application
+    url: file:///home/saldev/projects/formwatch/fixtures/test-form.html

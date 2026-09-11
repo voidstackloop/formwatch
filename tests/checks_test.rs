@@ -1,0 +1,168 @@
+//! Exercises the check engine against the fixtures in `fixtures/`, which
+//! have deliberate, known bugs planted in them. Needs a real Chrome (or
+//! formwatch's own fetcher — see src/browser.rs) since these launch an
+//! actual browser; there's no way to test `page.evaluate()` behavior
+//! without one.
+
+use chromiumoxide::{Browser, Page};
+use formwatch::{browser, checks};
+use tokio::task::JoinHandle;
+
+async fn open_fixture(name: &str) -> (Browser, Page, JoinHandle<()>) {
+    let (browser, handle) = browser::launch(false).await.expect("launch chrome");
+    let path = std::fs::canonicalize(format!("fixtures/{name}")).expect("fixture exists");
+    let url = format!("file://{}", path.display());
+    let page = browser::open(&browser, &url).await.expect("open fixture");
+    (browser, page, handle)
+}
+
+fn find<'a>(results: &'a [checks::CheckResult], name: &str) -> &'a checks::CheckResult {
+    results
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("no check named {name:?} in {results:#?}"))
+}
+
+fn status_of(results: &[checks::CheckResult], name: &str) -> checks::Status {
+    find(results, name).status
+}
+
+#[tokio::test]
+async fn single_page_fixture_catches_its_planted_bugs() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let results = checks::run_all(&page, false, 1).await;
+
+    // fixtures/test-form.html deliberately has: a missing alt attribute,
+    // an unlabeled required field, an unlabeled file upload with no
+    // format guidance, and tiny tap targets — each should surface as a
+    // Fail on the check that's supposed to catch it.
+    assert_eq!(status_of(&results, "Accessibility"), checks::Status::Fail);
+    assert_eq!(
+        status_of(&results, "Validation errors"),
+        checks::Status::Fail
+    );
+    assert_eq!(
+        status_of(&results, "Required documents"),
+        checks::Status::Fail
+    );
+    // fullname has autocomplete="name" (should be excluded); email has
+    // none and its label matches the "email" guess (should be counted).
+    let autofill = find(&results, "Autofill hints");
+    assert_eq!(autofill.status, checks::Status::Warn);
+    assert!(
+        autofill.detail.starts_with("1 field(s)"),
+        "got: {}",
+        autofill.detail
+    );
+
+    // The form itself is well-formed and single-step, so filling and
+    // validating it (without --submit) should pass cleanly. The fixture's
+    // date field has min="2030-01-01" specifically to catch a regression
+    // where formwatch fills date fields with a hardcoded past date,
+    // tripping the field's own min constraint for no real reason.
+    let submission = find(&results, "Submission flow");
+    assert_eq!(submission.status, checks::Status::Pass);
+    assert!(
+        submission.detail.contains("reports valid"),
+        "expected the date field's dummy value to respect min=\"2030-01-01\", got: {}",
+        submission.detail
+    );
+    assert_eq!(
+        status_of(&results, "Input persistence"),
+        checks::Status::Pass
+    );
+}
+
+#[tokio::test]
+async fn multi_step_wizard_is_walked_to_the_final_submit() {
+    let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow");
+
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("Advanced through 2 step"),
+        "expected the check to report walking both Next/Continue steps, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn unrelated_timeout_copy_does_not_false_positive_session_warning() {
+    // fixtures/multi-step-form.html has a footer note mentioning "times
+    // out"/"timed out" in an unrelated (network, not session) context —
+    // regression test for a bug where a bare "timed out" match anywhere
+    // on the page, not anchored to "session", triggered a false Warn.
+    let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
+    let result = checks::check_input_persistence(&page, 1)
+        .await
+        .expect("check_input_persistence");
+
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("session-timeout wording seen=false"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn required_checkbox_as_first_field_is_actually_invalidated() {
+    // fixtures/checkbox-first-form.html's only required field is a
+    // checkbox. Fill it (as run_all's check_submission_flow does, making
+    // it checked/valid) before checking validation — regression test for
+    // a bug where forcing "one required field invalid" set .value on a
+    // checkbox, which is a silent no-op, so the check never actually
+    // exercised the browser's invalid-field handling.
+    let (_browser, page, _handle) = open_fixture("checkbox-first-form.html").await;
+    checks::check_submission_flow(&page, false)
+        .await
+        .expect("fill+validate");
+
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    assert!(
+        result
+            .detail
+            .contains("Native validation blocked submit: true"),
+        "expected forcing the required checkbox unchecked to block validation, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn multi_step_wizard_real_submit_reaches_the_thank_you_page() {
+    let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
+    let result = checks::check_submission_flow(&page, true)
+        .await
+        .expect("check_submission_flow");
+
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(result.detail.contains("success=true"));
+}
+
+#[tokio::test]
+async fn full_run_with_submit_still_checks_the_form_not_the_confirmation_page() {
+    // fixtures/multi-step-form.html's confirmation fully replaces
+    // document.body.innerHTML on real submit — regression test for a bug
+    // where every check after check_submission_flow then silently ran
+    // against that confirmation markup (no <form> at all) instead of the
+    // form itself.
+    let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
+    let results = checks::run_all(&page, true, 1).await;
+
+    let submission = find(&results, "Submission flow");
+    assert_eq!(submission.status, checks::Status::Pass);
+    assert!(submission.detail.contains("success=true"));
+
+    // If the bug were present, this would see 0 required fields (the
+    // confirmation page has no <form>) instead of the form's real 2.
+    let validation = find(&results, "Validation errors");
+    assert!(
+        validation.detail.starts_with("2 required field(s)"),
+        "expected the form's required fields, not the confirmation page's, got: {}",
+        validation.detail
+    );
+}
