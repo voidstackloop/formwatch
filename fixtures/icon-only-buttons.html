@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Icon Only Buttons</title></head>
+<body>
+  <form id="wizard">
+    <div class="step" id="step1">
+      <label for="s1name">Name</label>
+      <input type="text" id="s1name" name="s1name" required>
+      <button type="button" id="nextBtn" aria-label="Next step">
+        <svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 2 L12 8 L4 14 Z"></path></svg>
+      </button>
+    </div>
+    <div class="step" id="step2" hidden>
+      <label for="s2email">Email</label>
+      <input type="email" id="s2email" name="s2email" required>
+      <button type="submit" id="submitBtn" aria-label="Submit form">
+        <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"></circle></svg>
+      </button>
+    </div>
+  </form>
+  <script>
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      document.getElementById('step1').hidden = true;
+      document.getElementById('step2').hidden = false;
+    });
+  </script>
+</body>
+</html>

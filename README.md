@@ -132,3 +132,18 @@ not deployed.
   whether error or instruction *wording* is actually understandable —
   that needs a human or an LLM pass, not pattern matching.
 - Long real-world session timeouts aren't exercised by default (see above).
+- The wizard-step classifier (Next/Continue/Submit detection) matches
+  English words. A form whose step controls are labeled in another
+  language won't be walked past the first step — it'll report "found no
+  Next/Continue or submit button" even though the form works fine for a
+  real user in that language.
+- Dummy field values are filled via `input`/`change` events only, not
+  real keystrokes. A Next/submit button gated on a `keyup`/`keydown`
+  listener (rather than `input`/`change`) will look stuck to formwatch
+  even though the form works fine for a real user typing into it.
+- Every check operates on regular DOM (`document.querySelectorAll`).
+  Content inside a Shadow DOM or an `<iframe>` is invisible — a form
+  built with web components will report "No `<form>` element found"
+  rather than a real result. This shows up as a loud, unambiguous
+  failure rather than a misleading pass, but it's still a coverage gap
+  worth knowing about for component-library-based sites.

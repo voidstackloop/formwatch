@@ -167,7 +167,13 @@ async fn main() -> Result<()> {
                 match load_forms_config(config) {
                     Ok(cfg) => entries.extend(cfg.forms),
                     Err(e) => {
-                        eprintln!("{}: {e:#}", format!("skipping {}", config.display()).red())
+                        eprintln!("{}: {e:#}", format!("skipping {}", config.display()).red());
+                        // A config that couldn't even be read/parsed is a
+                        // real failure, not a soft warning — exit 1 so a
+                        // typo'd filename or broken YAML doesn't produce a
+                        // silently-green CI job, contradicting the exit-code
+                        // contract this tool documents.
+                        any_fail = true;
                     }
                 }
             }
@@ -237,6 +243,10 @@ fn init(path: &Path) -> Result<()> {
             "{} already exists — remove it first if you want a fresh starter config.",
             path.display()
         );
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
     std::fs::write(path, STARTER_FORMS_YML)
         .with_context(|| format!("writing {}", path.display()))?;

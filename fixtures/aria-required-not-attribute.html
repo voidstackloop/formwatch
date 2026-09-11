@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Aria Required Only</title></head>
+<body>
+  <form>
+    <label for="fullname" id="fullname-label">Full name</label>
+    <input type="text" id="fullname" name="fullname" aria-required="true" aria-describedby="fullname-err">
+    <span id="fullname-err" style="color:red"></span>
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" aria-required="true">
+
+    <button type="submit">Submit</button>
+  </form>
+  <script>
+    // Custom JS-driven validation (no native required attribute at all) —
+    // common on frameworks that manage their own validation state instead
+    // of relying on the constraint-validation API.
+    document.querySelector('form').addEventListener('submit', (e) => {
+      const name = document.getElementById('fullname');
+      if (!name.value.trim()) {
+        e.preventDefault();
+        name.setAttribute('aria-invalid', 'true');
+        document.getElementById('fullname-err').textContent = 'Full name is required.';
+      }
+    });
+  </script>
+</body>
+</html>

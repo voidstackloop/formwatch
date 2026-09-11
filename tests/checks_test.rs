@@ -133,6 +133,114 @@ async fn required_checkbox_as_first_field_is_actually_invalidated() {
 }
 
 #[tokio::test]
+async fn multi_form_page_submits_the_bigger_form_not_the_header_search_box() {
+    // fixtures/multi-form-page.html has a tiny header search <form> before
+    // the real "apply-form". Regression test for a bug where every JS
+    // selector was unscoped (`document.querySelector('form')`,
+    // `document.querySelectorAll('form button, ...')`), so filling,
+    // clicking, and validating operated on whichever form happened to be
+    // first in the document — the search box, not the form under test.
+    // With --submit this used to actually click the wrong live control.
+    let (_browser, page, _handle) = open_fixture("multi-form-page.html").await;
+    let result = checks::check_submission_flow(&page, true)
+        .await
+        .expect("check_submission_flow");
+    assert_eq!(result.status, checks::Status::Pass);
+
+    let final_url: String = page
+        .evaluate("location.href")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        final_url.contains("applicant="),
+        "expected the apply-form's fields in the URL, got: {final_url}"
+    );
+    assert!(
+        !final_url.contains("?q="),
+        "the header search form's field leaked into the URL: {final_url}"
+    );
+}
+
+#[tokio::test]
+async fn multi_form_page_validation_targets_the_bigger_form() {
+    let (_browser, page, _handle) = open_fixture("multi-form-page.html").await;
+    checks::check_submission_flow(&page, false)
+        .await
+        .expect("fill+validate");
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    // apply-form has 2 required fields; the header search form has 0.
+    assert!(
+        result.detail.starts_with("2 required field(s)"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn icon_only_next_button_is_recognized_via_aria_label() {
+    // fixtures/icon-only-buttons.html's Next/Submit buttons have no text,
+    // only an SVG icon child and aria-label — regression test for two
+    // compounding bugs: label() not checking aria-label at all, and
+    // (once added) checking untrimmed textContent first, which is
+    // truthy whitespace from indentation around the <svg> child and
+    // short-circuits past aria-label before ever reaching it.
+    let (_browser, page, _handle) = open_fixture("icon-only-buttons.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow");
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("Advanced through 1 step"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn quote_in_element_id_does_not_break_the_label_lookup() {
+    // fixtures/quote-in-id-form.html's file input has id='weird"id' (legal
+    // HTML). Regression test for building a `label[for="${el.id}"]` CSS
+    // selector string directly from an id — a quote in the id breaks the
+    // selector with a DOMException, which run_safely then reported as
+    // "check did not complete" instead of a real answer.
+    let (_browser, page, _handle) = open_fixture("quote-in-id-form.html").await;
+    let result = checks::check_required_documents(&page)
+        .await
+        .expect("check_required_documents");
+    assert!(
+        result.detail.contains("Without an accessible label: 0"),
+        "expected the label to be found despite the quote in the id, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn aria_required_only_fields_get_a_warn_not_a_false_pass() {
+    // fixtures/aria-required-not-attribute.html's fields use only
+    // aria-required (no native `required` attribute) with real custom JS
+    // validation on submit. Native reportValidity()/:invalid never see
+    // aria-required, so without this fix the check always reported a
+    // false Pass — "native validation" that never actually ran anything.
+    let (_browser, page, _handle) = open_fixture("aria-required-not-attribute.html").await;
+    checks::check_submission_flow(&page, false)
+        .await
+        .expect("fill+validate");
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    assert_eq!(result.status, checks::Status::Warn);
+    assert!(
+        result.detail.contains("couldn't exercise them"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn multi_step_wizard_real_submit_reaches_the_thank_you_page() {
     let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
     let result = checks::check_submission_flow(&page, true)

@@ -51,29 +51,50 @@ impl std::fmt::Display for Status {
     }
 }
 
-/// Fills every visible input/select/textarea on the page with plausible dummy
-/// data so the later checks (validation, persistence) have something to work
-/// with. Returns the number of fields filled.
+/// Resolves to "the form under test": the `<form>` with the most input/
+/// select/textarea descendants, not just the first one in document order.
+/// A real page often has an incidental header/footer search box as its
+/// own tiny `<form>` — blindly using `document.querySelector('form')`
+/// (the original approach) would silently fill, click, and validate
+/// *that* instead of the actual application form. Picked once per page
+/// session and cached on `window` so every check agrees on the same
+/// form, and so "the form disappeared" means specifically this form is
+/// gone, not merely that some other form on the page still exists.
+const TARGET_FORM_JS: &str = "(() => {
+    if (window.__formwatchFormPicked) {
+        return document.contains(window.__formwatchForm) ? window.__formwatchForm : null;
+    }
+    window.__formwatchFormPicked = true;
+    const forms = Array.from(document.querySelectorAll('form'));
+    forms.sort((a, b) => b.querySelectorAll('input, select, textarea').length - a.querySelectorAll('input, select, textarea').length);
+    window.__formwatchForm = forms[0] ?? null;
+    return window.__formwatchForm;
+})()";
+
+/// Fills every visible input/select/textarea on the target form with
+/// plausible dummy data so the later checks (validation, persistence)
+/// have something to work with. Returns the number of fields filled.
 async fn fill_form_fields(page: &Page) -> Result<usize> {
     let filled: i64 = page
-        .evaluate(
-            r#"(() => {
-                const fields = document.querySelectorAll('input, textarea, select');
+        .evaluate(format!(
+            r#"(() => {{
+                const form = {TARGET_FORM_JS};
+                const fields = form ? form.querySelectorAll('input, textarea, select') : [];
                 let count = 0;
-                for (const el of fields) {
+                for (const el of fields) {{
                     if (el.disabled || el.type === 'hidden' || el.type === 'submit' || el.type === 'button' || el.type === 'file') continue;
                     if (el.offsetParent === null) continue; // not visible
-                    if (el.tagName === 'SELECT') {
+                    if (el.tagName === 'SELECT') {{
                         if (el.options.length > 1) el.selectedIndex = 1;
-                    } else if (el.type === 'checkbox' || el.type === 'radio') {
+                    }} else if (el.type === 'checkbox' || el.type === 'radio') {{
                         el.checked = true;
-                    } else if (el.type === 'email') {
+                    }} else if (el.type === 'email') {{
                         el.value = 'formwatch-test@example.com';
-                    } else if (el.type === 'tel') {
+                    }} else if (el.type === 'tel') {{
                         el.value = '5555550123';
-                    } else if (el.type === 'number' || el.type === 'range') {
+                    }} else if (el.type === 'number' || el.type === 'range') {{
                         el.value = el.min || '1';
-                    } else if (el.type === 'date') {
+                    }} else if (el.type === 'date') {{
                         // Respect min/max — a hardcoded date can violate a
                         // form's own constraints (e.g. an appointment
                         // scheduler requiring a future date) and report a
@@ -81,16 +102,16 @@ async fn fill_form_fields(page: &Page) -> Result<usize> {
                         // site itself.
                         const today = new Date().toISOString().slice(0, 10);
                         el.value = el.min || (el.max && el.max < today ? el.max : today);
-                    } else {
+                    }} else {{
                         el.value = 'Formwatch Test';
-                    }
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }}
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     count += 1;
-                }
+                }}
                 return count;
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
     Ok(filled as usize)
@@ -98,19 +119,34 @@ async fn fill_form_fields(page: &Page) -> Result<usize> {
 
 const MAX_WIZARD_STEPS: usize = 8;
 
-/// Only buttons the user could actually see and click — a hidden earlier
-/// step's "Next" stays in the DOM after `hidden` is set on it, so without
-/// this filter a wizard would loop forever re-clicking a stale control.
-const VISIBLE_BUTTONS_JS: &str = "Array.from(document.querySelectorAll('form button, form input[type=submit], form input[type=button]')).filter(b => b.offsetParent !== null)";
+/// Only buttons the user could actually see and click, scoped to the
+/// target form — a hidden earlier step's "Next" stays in the DOM after
+/// `hidden` is set on it, so without the visibility filter a wizard would
+/// loop forever re-clicking a stale control; without the form scope, a
+/// button in some other `<form>` on the page (e.g. a header search box)
+/// could get misclassified as this form's Next/submit control.
+fn visible_buttons_js() -> String {
+    format!(
+        "(() => {{ const f = {TARGET_FORM_JS}; return f ? Array.from(f.querySelectorAll('button, input[type=submit], input[type=button]')).filter(b => b.offsetParent !== null) : []; }})()"
+    )
+}
+
+const LABEL_JS: &str = "b => (b.textContent.trim() || b.value || b.getAttribute('aria-label') || b.title || '').trim()";
 
 /// Classifies the visible action on the current step: "next" (Next/Continue
 /// — advance a multi-step wizard without submitting), "final" (Submit/
 /// Apply/Finish/... or a bare type=submit), or "none".
 fn classify_action_js() -> String {
+    let buttons = visible_buttons_js();
     format!(
         r#"(() => {{
-            const label = b => (b.textContent || b.value || '').trim();
-            const buttons = {VISIBLE_BUTTONS_JS};
+            // textContent must be trimmed *before* the `||` chain, not just
+            // at the end — an icon-only button with whitespace/newlines
+            // around its <svg> child has non-empty (truthy) whitespace-only
+            // textContent, which would short-circuit past aria-label/title
+            // otherwise.
+            const label = {LABEL_JS};
+            const buttons = {buttons};
             if (buttons.some(b => /\b(next|continue)\b/i.test(label(b)))) return 'next';
             if (buttons.some(b => b.type === 'submit' || /\b(submit|apply|finish|send|complete)\b/i.test(label(b)))) return 'final';
             return 'none';
@@ -119,10 +155,16 @@ fn classify_action_js() -> String {
 }
 
 fn click_matching_js(pattern: &str) -> String {
+    let buttons = visible_buttons_js();
     format!(
         r#"(() => {{
-            const label = b => (b.textContent || b.value || '').trim();
-            const buttons = {VISIBLE_BUTTONS_JS};
+            // textContent must be trimmed *before* the `||` chain, not just
+            // at the end — an icon-only button with whitespace/newlines
+            // around its <svg> child has non-empty (truthy) whitespace-only
+            // textContent, which would short-circuit past aria-label/title
+            // otherwise.
+            const label = {LABEL_JS};
+            const buttons = {buttons};
             const target = buttons.find(b => {pattern});
             if (target) {{ target.click(); return true; }}
             return false;
@@ -157,11 +199,11 @@ pub async fn check_submission_flow(page: &Page, allow_submit: bool) -> Result<Ch
     let mut total_filled = 0usize;
 
     loop {
-        let form_count: i64 = page
-            .evaluate("document.querySelectorAll('form').length")
+        let target_form_exists: bool = page
+            .evaluate(format!("({TARGET_FORM_JS}) !== null"))
             .await?
             .into_value()?;
-        if form_count == 0 {
+        if !target_form_exists {
             if steps == 0 {
                 return Ok(result(
                     "Submission flow",
@@ -221,7 +263,9 @@ pub async fn check_submission_flow(page: &Page, allow_submit: bool) -> Result<Ch
             }
             "final" => {
                 let valid: bool = page
-                    .evaluate("(() => { const f = document.querySelector('form'); return f.checkValidity ? f.checkValidity() : true; })()")
+                    .evaluate(format!(
+                        "(() => {{ const f = {TARGET_FORM_JS}; return !f || !f.checkValidity ? true : f.checkValidity(); }})()"
+                    ))
                     .await?
                     .into_value()?;
 
@@ -358,32 +402,41 @@ pub async fn check_mobile_usability(page: &Page) -> Result<CheckResult> {
     .await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let overflow: bool = page
-        .evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
-        .await?
-        .into_value()?;
+    // Measure inside its own block so the reset below always runs even
+    // if a measurement fails — otherwise an early `?` return would skip
+    // the reset entirely, leaving the viewport stuck in mobile mode for
+    // every check that runs after this one in run_all's fixed order.
+    let measured: Result<(bool, i64)> = async {
+        let overflow: bool = page
+            .evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
+            .await?
+            .into_value()?;
 
-    let small_targets: i64 = page
-        .evaluate(
-            r#"(() => {
-                const els = document.querySelectorAll('a, button, input, select, textarea');
-                let small = 0;
-                for (const el of els) {
-                    const r = el.getBoundingClientRect();
-                    if (r.width === 0 && r.height === 0) continue;
-                    if (r.width < 44 || r.height < 44) small += 1;
-                }
-                return small;
-            })()"#,
-        )
-        .await?
-        .into_value()?;
+        let small_targets: i64 = page
+            .evaluate(
+                r#"(() => {
+                    const els = document.querySelectorAll('a, button, input, select, textarea');
+                    let small = 0;
+                    for (const el of els) {
+                        const r = el.getBoundingClientRect();
+                        if (r.width === 0 && r.height === 0) continue;
+                        if (r.width < 44 || r.height < 44) small += 1;
+                    }
+                    return small;
+                })()"#,
+            )
+            .await?
+            .into_value()?;
+
+        Ok((overflow, small_targets))
+    }
+    .await;
 
     // Reset to a normal desktop viewport for whatever check runs next.
-    // Best-effort: overflow/small_targets are already computed and valid,
-    // so a failure here shouldn't discard this check's real result via
-    // `?` — that would report "Mobile usability: check did not complete"
-    // for a check that in fact completed just fine.
+    // Best-effort: measured results (if any) are already computed and
+    // valid, so a failure here shouldn't discard them via `?` — that
+    // would report "Mobile usability: check did not complete" for a
+    // check that in fact completed just fine.
     if let Ok(reset) = SetDeviceMetricsOverrideParams::builder()
         .width(1280)
         .height(800)
@@ -394,6 +447,7 @@ pub async fn check_mobile_usability(page: &Page) -> Result<CheckResult> {
         let _ = page.execute(reset).await;
     }
 
+    let (overflow, small_targets) = measured?;
     let status = if overflow || small_targets > 0 {
         Status::Warn
     } else {
@@ -484,7 +538,19 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
 /// error text), not just implied by color.
 pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
     let required_count: i64 = page
-        .evaluate("document.querySelectorAll('form [required], form [aria-required=true]').length")
+        .evaluate(format!(
+            "(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('[required], [aria-required=true]').length : 0; }})()"
+        ))
+        .await?
+        .into_value()?;
+
+    // Fields using only aria-required (no native `required` attribute)
+    // are invisible to reportValidity()/:invalid — the browser's native
+    // constraint validation was never actually exercising anything for
+    // them. Tracked separately so an all-aria-required form doesn't get
+    // a false Pass just because nothing native-invalid was found.
+    let native_required_count: i64 = page
+        .evaluate(format!("(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('[required]').length : 0; }})()"))
         .await?
         .into_value()?;
 
@@ -493,39 +559,42 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
     // .value on one is a silent no-op that leaves it valid, so a form
     // whose first required field is a checkbox needs a different reset.
     let triggered: bool = page
-        .evaluate(
-            r#"(() => {
-                const req = document.querySelector('form [required], form [aria-required=true]');
-                if (req) {
-                    if (req.type === 'checkbox' || req.type === 'radio') {
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                if (!f) return false;
+                const req = f.querySelector('[required], [aria-required=true]');
+                if (req) {{
+                    if (req.type === 'checkbox' || req.type === 'radio') {{
                         req.checked = false;
-                    } else if (req.tagName === 'SELECT') {
+                    }} else if (req.tagName === 'SELECT') {{
                         req.selectedIndex = -1;
-                    } else {
+                    }} else {{
                         req.value = '';
-                    }
-                }
-                const f = document.querySelector('form');
-                if (!f || !f.reportValidity) return false;
+                    }}
+                }}
+                if (!f.reportValidity) return false;
                 return !f.reportValidity();
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
 
     let unlabeled_invalid: i64 = page
-        .evaluate(
-            r#"(() => {
-                const invalid = document.querySelectorAll('form :invalid, form [aria-invalid=true]');
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                if (!f) return 0;
+                const invalid = f.querySelectorAll(':invalid, [aria-invalid=true]');
                 let unlabeled = 0;
-                for (const el of invalid) {
+                for (const el of invalid) {{
                     const describedBy = el.getAttribute('aria-describedby');
                     const hasDescribedText = describedBy && document.getElementById(describedBy)?.textContent.trim();
                     if (!hasDescribedText) unlabeled += 1;
-                }
+                }}
                 return unlabeled;
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
 
@@ -540,15 +609,25 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
 
     let status = if unlabeled_invalid > 0 {
         Status::Fail
+    } else if native_required_count == 0 {
+        // Every required-looking field is aria-required-only, so native
+        // validation genuinely could not have exercised anything — a
+        // Pass here would be false confidence, not a real result.
+        Status::Warn
     } else {
         Status::Pass
+    };
+    let aria_only_note = if native_required_count == 0 {
+        " All of them use aria-required without the native required attribute, so native validation couldn't exercise them — pass --submit to test the site's real (custom JS) validation."
+    } else {
+        ""
     };
     Ok(result(
         "Validation errors",
         status,
         format!(
             "{required_count} required field(s). Native validation blocked submit: {triggered}. \
-             Invalid field(s) without a screen-reader-visible error message: {unlabeled_invalid}."
+             Invalid field(s) without a screen-reader-visible error message: {unlabeled_invalid}.{aria_only_note}"
         ),
     ))
 }
@@ -565,7 +644,9 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
         .into_value()?;
 
     let file_inputs: i64 = page
-        .evaluate("document.querySelectorAll('input[type=file]').length")
+        .evaluate(format!(
+            "(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('input[type=file]').length : 0; }})()"
+        ))
         .await?
         .into_value()?;
 
@@ -586,35 +667,40 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
     }
 
     let unlabeled: i64 = page
-        .evaluate(
-            r#"(() => {
-                const inputs = document.querySelectorAll('input[type=file]');
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                const inputs = f ? f.querySelectorAll('input[type=file]') : [];
                 let unlabeled = 0;
-                for (const el of inputs) {
-                    const byFor = el.id && document.querySelector(`label[for="${el.id}"]`)?.textContent.trim();
+                for (const el of inputs) {{
+                    // Not a `label[for="${{el.id}}"]` selector: an id containing a
+                    // double quote (legal in HTML) breaks that selector with a
+                    // DOMException instead of just not matching.
+                    const byFor = el.id && Array.from(document.querySelectorAll('label')).find((l) => l.htmlFor === el.id)?.textContent.trim();
                     const byWrap = el.closest('label')?.textContent.trim();
                     const byAria = el.getAttribute('aria-label');
                     if (!byFor && !byWrap && !byAria) unlabeled += 1;
-                }
+                }}
                 return unlabeled;
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
 
     let without_format_guidance: i64 = page
-        .evaluate(
-            r#"(() => {
-                const inputs = document.querySelectorAll('input[type=file]');
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                const inputs = f ? f.querySelectorAll('input[type=file]') : [];
                 let missing = 0;
-                for (const el of inputs) {
+                for (const el of inputs) {{
                     if (el.hasAttribute('accept')) continue;
                     const nearbyText = el.closest('label, div, li, p, fieldset')?.textContent.toLowerCase() ?? '';
                     if (!/pdf|jpg|jpeg|png|doc|mb|size|format/.test(nearbyText)) missing += 1;
-                }
+                }}
                 return missing;
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
 
@@ -643,26 +729,27 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
 /// exactly the kind of form people fill out repeatedly.
 pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
     let missing: i64 = page
-        .evaluate(
-            r#"(() => {
+        .evaluate(format!(
+            r#"(() => {{
                 const guesses = [/name/i, /e-?mail/i, /tel|phone/i, /postal|zip/i, /address/i];
-                const fields = document.querySelectorAll(
-                    'form input[type=text], form input[type=email], form input[type=tel], form input:not([type])'
-                );
+                const f = {TARGET_FORM_JS};
+                const fields = f ? f.querySelectorAll(
+                    'input[type=text], input[type=email], input[type=tel], input:not([type])'
+                ) : [];
                 let missing = 0;
-                for (const el of fields) {
+                for (const el of fields) {{
                     if (el.disabled || el.offsetParent === null || el.hasAttribute('autocomplete')) continue;
                     const label = (
-                        document.querySelector(`label[for="${el.id}"]`)?.textContent
+                        Array.from(document.querySelectorAll('label')).find((l) => l.htmlFor === el.id)?.textContent
                         || el.name
                         || el.id
                         || ''
                     ).toLowerCase();
                     if (guesses.some((re) => re.test(label))) missing += 1;
-                }
+                }}
                 return missing;
-            })()"#,
-        )
+            }})()"#
+        ))
         .await?
         .into_value()?;
 
