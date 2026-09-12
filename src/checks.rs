@@ -496,7 +496,8 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
     let set: bool = page
         .evaluate(format!(
             r#"(() => {{
-                const el = document.querySelector('input[type=text], input:not([type]), textarea');
+                const f = {TARGET_FORM_JS};
+                const el = f?.querySelector('input[type=text], input:not([type]), textarea');
                 if (!el) return false;
                 el.value = '{marker}';
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
@@ -518,7 +519,7 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
 
     let still_there: bool = page
         .evaluate(format!(
-            "document.querySelector('input[type=text], input:not([type]), textarea')?.value === '{marker}'"
+            "({TARGET_FORM_JS})?.querySelector('input[type=text], input:not([type]), textarea')?.value === '{marker}'"
         ))
         .await?
         .into_value()?;

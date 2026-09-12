@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Two Forms, One Clears Itself</title></head>
+<body>
+  <h1>Search this site</h1>
+  <form id="search-form">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q">
+    <button type="submit">Search</button>
+  </form>
+
+  <h1>Apply for a permit</h1>
+  <form id="apply-form">
+    <label for="applicant">Applicant name</label>
+    <input type="text" id="applicant" name="applicant" required>
+    <label for="applicant-email">Email</label>
+    <input type="email" id="applicant-email" name="applicant-email" required>
+    <button type="submit">Apply</button>
+  </form>
+  <script>
+    // The header search box clears itself shortly after any input — an
+    // unrelated widget's own behavior, nothing to do with the real
+    // application form's session handling.
+    document.getElementById('q').addEventListener('input', () => {
+      setTimeout(() => { document.getElementById('q').value = ''; }, 300);
+    });
+  </script>
+</body>
+</html>

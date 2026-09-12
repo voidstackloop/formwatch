@@ -181,6 +181,27 @@ async fn multi_form_page_validation_targets_the_bigger_form() {
 }
 
 #[tokio::test]
+async fn input_persistence_targets_the_real_form_not_a_header_search_box() {
+    // fixtures/multi-form-persistence.html's header search field clears
+    // itself shortly after typing (an unrelated widget's own behavior) —
+    // the real apply-form's field is untouched. Regression test for a
+    // bug where the field selector was unscoped, so on a multi-form page
+    // this check could test the search box instead of the form under
+    // test, reporting a false Fail ("input lost") for a session-handling
+    // problem that doesn't actually exist on the real form.
+    let (_browser, page, _handle) = open_fixture("multi-form-persistence.html").await;
+    let result = checks::check_input_persistence(&page, 1)
+        .await
+        .expect("check_input_persistence");
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("input retained=true"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn icon_only_next_button_is_recognized_via_aria_label() {
     // fixtures/icon-only-buttons.html's Next/Submit buttons have no text,
     // only an SVG icon child and aria-label — regression test for two
