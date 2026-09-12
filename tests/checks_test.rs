@@ -357,3 +357,54 @@ async fn full_run_with_submit_still_checks_the_form_not_the_confirmation_page() 
         validation.detail
     );
 }
+
+#[tokio::test]
+async fn mobile_usability_flags_small_tap_targets() {
+    // fixtures/test-form.html has a deliberately tiny 20x20px button
+    // (`.tiny-btn`). Called directly rather than only inferred through
+    // run_all's aggregate result, so a regression in the tap-target scan
+    // itself would be caught here specifically.
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_mobile_usability(&page)
+        .await
+        .expect("check_mobile_usability");
+    assert_eq!(result.status, checks::Status::Warn);
+    assert!(
+        !result.detail.contains("Tap targets under 44x44px: 0"),
+        "expected the tiny button to be counted, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn run_custom_checks_runs_every_script_and_names_by_filename() {
+    // fixtures/custom-checks/ has three scripts covering the three
+    // branches run_custom_checks handles: a real Pass, a real Fail, and
+    // a malformed return value that should degrade to a Warn rather than
+    // erroring the whole run. Previously exercised only manually via the
+    // CLI (e.g. while verifying the custom-check timeout) — this was the
+    // only public function in the whole library with zero automated
+    // coverage of its own.
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let dir = std::path::Path::new("fixtures/custom-checks");
+    let results = checks::run_custom_checks(&page, dir)
+        .await
+        .expect("run_custom_checks");
+    assert_eq!(results.len(), 3);
+
+    let pass = find(&results, "always-pass");
+    assert_eq!(pass.status, checks::Status::Pass);
+    assert_eq!(pass.detail, "always fine");
+
+    let fail = find(&results, "always-fail");
+    assert_eq!(fail.status, checks::Status::Fail);
+    assert_eq!(fail.detail, "always broken");
+
+    let malformed = find(&results, "malformed");
+    assert_eq!(malformed.status, checks::Status::Warn);
+    assert!(
+        malformed.detail.contains("did not return"),
+        "got: {}",
+        malformed.detail
+    );
+}
