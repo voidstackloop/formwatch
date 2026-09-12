@@ -268,6 +268,36 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn all_known_forms_returns_each_forms_newest_run_sorted_newest_first() {
+        // Never directly tested before — only inferred through
+        // report::build's single-form test, which doesn't exercise
+        // "each form's own newest, independent of the others" or the
+        // cross-form sort order at all.
+        let dir = std::env::temp_dir().join("formwatch-test-all-known-forms");
+        let _ = fs::remove_dir_all(&dir);
+
+        // Form A: two runs, newer one at ts=300.
+        save_run(&dir, &run_at("https://city.gov/a", 100)).expect("save");
+        save_run(&dir, &run_at("https://city.gov/a", 300)).expect("save");
+        // Form B: a single run at ts=200 — between A's two runs, so a
+        // naive "last file written" or "first form found" approach would
+        // get the ordering wrong.
+        save_run(&dir, &run_at("https://city.gov/b", 200)).expect("save");
+
+        let forms = all_known_forms(&dir).expect("all_known_forms");
+        assert_eq!(forms.len(), 2, "one entry per form, not per run");
+        assert_eq!(forms[0].url, "https://city.gov/a");
+        assert_eq!(
+            forms[0].timestamp, 300,
+            "should be A's newest run, not its oldest"
+        );
+        assert_eq!(forms[1].url, "https://city.gov/b");
+        assert_eq!(forms[1].timestamp, 200);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn run_at(url: &str, timestamp: i64) -> RunResult {
         RunResult {
             name: "x".into(),
