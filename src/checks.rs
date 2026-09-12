@@ -125,6 +125,37 @@ async fn fill_form_fields(page: &Page) -> Result<usize> {
 
 const MAX_WIZARD_STEPS: usize = 8;
 
+/// Ceiling for `wait_for_text_change` after clicking a wizard's Next
+/// button — generous enough for a slow, legitimately-animated step
+/// transition, but `wait_for_text_change` itself usually returns far
+/// sooner (most transitions are synchronous DOM updates, detected on
+/// the very first poll).
+const STEP_TRANSITION_MAX_WAIT: Duration = Duration::from_millis(3000);
+
+/// Polls `document.body.innerText` every 50ms until it differs from
+/// `before` or `max_wait` elapses. Replaces what used to be a fixed
+/// sleep, which was both slower than necessary for the common case
+/// (most step transitions are synchronous DOM updates that finish in a
+/// handful of milliseconds, not several hundred) and less reliable for
+/// an uncommon one (a slower, animated transition could take longer
+/// than a short fixed wait and get wrongly reported as "this step is
+/// broken").
+async fn wait_for_text_change(page: &Page, before: &str, max_wait: Duration) -> Result<String> {
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+    let mut waited = Duration::ZERO;
+    loop {
+        tokio::time::sleep(POLL_INTERVAL).await;
+        waited += POLL_INTERVAL;
+        let after: String = page
+            .evaluate("document.body.innerText")
+            .await?
+            .into_value()?;
+        if after != before || waited >= max_wait {
+            return Ok(after);
+        }
+    }
+}
+
 /// Only buttons the user could actually see and click, scoped to the
 /// target form — a hidden earlier step's "Next" stays in the DOM after
 /// `hidden` is set on it, so without the visibility filter a wizard would
@@ -270,11 +301,7 @@ pub async fn check_submission_flow(page: &Page, allow_submit: bool) -> Result<Ch
                     "{NEXT_WORDS_JS}.test(label(b))"
                 )))
                 .await?;
-                tokio::time::sleep(Duration::from_millis(700)).await;
-                let after: String = page
-                    .evaluate("document.body.innerText")
-                    .await?
-                    .into_value()?;
+                let after = wait_for_text_change(page, &before, STEP_TRANSITION_MAX_WAIT).await?;
                 if before == after {
                     return Ok(result(
                         "Submission flow",

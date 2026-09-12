@@ -89,6 +89,28 @@ async fn multi_step_wizard_is_walked_to_the_final_submit() {
 }
 
 #[tokio::test]
+async fn slow_but_legitimate_step_transition_is_not_reported_as_broken() {
+    // fixtures/slow-step-transition.html's Next button takes 1200ms to
+    // show the next step (an animated transition, a network-dependent
+    // step). Regression test for a bug where a fixed 700ms wait after
+    // clicking Next reported this working form as "that step appears
+    // broken" just because the transition took longer than the
+    // hardcoded wait — replaced with polling up to a much longer
+    // ceiling, which also resolves much faster for the common case of a
+    // synchronous (near-instant) transition.
+    let (_browser, page, _handle) = open_fixture("slow-step-transition.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow");
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("Advanced through 1 step"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn unrelated_timeout_copy_does_not_false_positive_session_warning() {
     // fixtures/multi-step-form.html has a footer note mentioning "times
     // out"/"timed out" in an unrelated (network, not session) context —

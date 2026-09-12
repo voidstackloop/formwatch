@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Slow Step Transition</title></head>
+<body>
+  <h1>Permit Application</h1>
+  <form>
+    <div class="step" data-step="1">
+      <label for="fullname">Full name</label>
+      <input id="fullname" name="fullname" type="text" required>
+      <button type="button" id="nextBtn">Next</button>
+    </div>
+    <div class="step" data-step="2" hidden>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required>
+      <button type="submit">Submit</button>
+    </div>
+  </form>
+  <script>
+    // A legitimately slow transition (e.g. an animated step change, or a
+    // network-dependent step) — takes longer than the tool's old fixed
+    // wait but should still be recognized as working, not "broken".
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      setTimeout(() => {
+        document.querySelector('[data-step="1"]').hidden = true;
+        document.querySelector('[data-step="2"]').hidden = false;
+      }, 1200);
+    });
+  </script>
+</body>
+</html>
