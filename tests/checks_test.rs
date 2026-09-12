@@ -259,6 +259,48 @@ async fn quote_in_element_id_does_not_break_the_label_lookup() {
         "expected the label to be found despite the quote in the id, got: {}",
         result.detail
     );
+    // The label is found, but this fixture's file input has no `accept`
+    // attribute and no nearby text naming a format/size — the Warn branch
+    // of check_required_documents, never directly asserted before.
+    assert_eq!(result.status, checks::Status::Warn);
+    assert!(
+        result
+            .detail
+            .contains("Without format/size guidance (accept attribute or nearby text): 1"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn required_document_upload_with_accept_and_a_label_passes() {
+    // fixtures/well-documented-upload-form.html's file input is labeled and
+    // has an `accept` attribute — the Pass branch of
+    // check_required_documents, never directly asserted before (only the
+    // Fail and Warn branches were).
+    let (_browser, page, _handle) = open_fixture("well-documented-upload-form.html").await;
+    let result = checks::check_required_documents(&page)
+        .await
+        .expect("check_required_documents");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}
+
+#[tokio::test]
+async fn page_text_promising_a_document_upload_with_no_file_field_is_flagged() {
+    // fixtures/mentions-documents-no-upload-form.html tells the user to
+    // upload a document but never actually provides a file input — the
+    // "0 file inputs" Warn branch of check_required_documents, never
+    // directly asserted before.
+    let (_browser, page, _handle) = open_fixture("mentions-documents-no-upload-form.html").await;
+    let result = checks::check_required_documents(&page)
+        .await
+        .expect("check_required_documents");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("no file upload field was found"),
+        "got: {}",
+        result.detail
+    );
 }
 
 #[tokio::test]
