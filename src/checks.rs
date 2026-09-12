@@ -820,22 +820,50 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
     ))
 }
 
-/// Runs one check's future to completion, converting an Err into a Warn
-/// result instead of letting it propagate. `run_all` checks many
-/// real-world pages unattended (nightly `monitor` runs); one check
-/// hitting a transient CDP hiccup or an unusual page structure shouldn't
-/// erase every other check's result for that form.
+/// Default ceiling for a single check — generous for a slow real-world
+/// page, but bounded. `check_submission_flow` gets its own longer
+/// ceiling (an 8-step wizard can legitimately take a while) and
+/// `check_input_persistence` gets one that scales with its own
+/// user-requested `--wait`, rather than sharing this default.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Runs one check's future to completion, converting an Err *or* a hang
+/// past `timeout` into a Warn result instead of letting it propagate or
+/// block forever. `run_all` checks many real-world pages unattended
+/// (nightly `monitor` runs); one check hitting a transient CDP hiccup,
+/// an unusual page structure, or a page whose JS genuinely never
+/// resolves (an infinite loop, a fetch() that never returns) shouldn't
+/// erase every other check's result for that form, or hang the whole
+/// tool indefinitely — previously there was no timeout anywhere in the
+/// check engine at all.
 async fn run_safely(
     name: &str,
+    timeout: Duration,
     fut: impl std::future::Future<Output = Result<CheckResult>>,
 ) -> CheckResult {
-    match fut.await {
-        Ok(check) => check,
-        Err(e) => result(name, Status::Warn, format!("check did not complete: {e:#}")),
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(check)) => check,
+        Ok(Err(e)) => result(name, Status::Warn, format!("check did not complete: {e:#}")),
+        Err(_) => result(
+            name,
+            Status::Warn,
+            format!(
+                "check did not complete: timed out after {}s",
+                timeout.as_secs()
+            ),
+        ),
     }
 }
 
 pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<CheckResult> {
+    // An 8-step wizard, each step waiting up to STEP_TRANSITION_MAX_WAIT,
+    // can legitimately take longer than the default CHECK_TIMEOUT.
+    const WIZARD_TIMEOUT: Duration = Duration::from_secs(60);
+    // The user explicitly controls how long this one waits (README
+    // advertises passing a large --wait to test a real session
+    // timeout) — its own ceiling has to scale with that, not share the
+    // fixed default, or a legitimate long --wait would get cut off.
+    let input_persistence_timeout = Duration::from_secs(wait_secs.saturating_add(30));
     // check_submission_flow runs first deliberately: the later checks
     // (especially validation errors, which breaks one already-valid
     // field to see if just that one gets caught) want a filled form, not
@@ -856,7 +884,12 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
         None
     };
 
-    let submission = run_safely("Submission flow", check_submission_flow(page, allow_submit)).await;
+    let submission = run_safely(
+        "Submission flow",
+        WIZARD_TIMEOUT,
+        check_submission_flow(page, allow_submit),
+    )
+    .await;
 
     if let Some(url) = original_url {
         let _ = page.goto(&url).await;
@@ -866,13 +899,29 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
 
     vec![
         submission,
-        run_safely("Accessibility", check_accessibility(page)).await,
-        run_safely("Mobile usability", check_mobile_usability(page)).await,
-        run_safely("Validation errors", check_validation_errors(page)).await,
-        run_safely("Required documents", check_required_documents(page)).await,
-        run_safely("Autofill hints", check_autofill_hints(page)).await,
+        run_safely("Accessibility", CHECK_TIMEOUT, check_accessibility(page)).await,
+        run_safely(
+            "Mobile usability",
+            CHECK_TIMEOUT,
+            check_mobile_usability(page),
+        )
+        .await,
+        run_safely(
+            "Validation errors",
+            CHECK_TIMEOUT,
+            check_validation_errors(page),
+        )
+        .await,
+        run_safely(
+            "Required documents",
+            CHECK_TIMEOUT,
+            check_required_documents(page),
+        )
+        .await,
+        run_safely("Autofill hints", CHECK_TIMEOUT, check_autofill_hints(page)).await,
         run_safely(
             "Input persistence",
+            input_persistence_timeout,
             check_input_persistence(page, wait_secs),
         )
         .await,
@@ -905,17 +954,18 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
         let src = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
 
-        let outcome: Result<serde_json::Value> = async {
-            let value = page
-                .evaluate(src)
-                .await?
-                .into_value::<serde_json::Value>()?;
-            Ok(value)
-        }
-        .await;
+        let outcome: std::result::Result<Result<serde_json::Value>, tokio::time::error::Elapsed> =
+            tokio::time::timeout(CHECK_TIMEOUT, async {
+                let value = page
+                    .evaluate(src)
+                    .await?
+                    .into_value::<serde_json::Value>()?;
+                Ok(value)
+            })
+            .await;
 
         results.push(match outcome {
-            Ok(value) => match value.get("status").and_then(|s| s.as_str()) {
+            Ok(Ok(value)) => match value.get("status").and_then(|s| s.as_str()) {
                 Some("Pass") => result(&name, Status::Pass, detail_of(&value)),
                 Some("Warn") => result(&name, Status::Warn, detail_of(&value)),
                 Some("Fail") => result(&name, Status::Fail, detail_of(&value)),
@@ -925,7 +975,15 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
                     "custom check did not return { status: \"Pass\"|\"Warn\"|\"Fail\", detail }",
                 ),
             },
-            Err(e) => result(&name, Status::Warn, format!("custom check errored: {e}")),
+            Ok(Err(e)) => result(&name, Status::Warn, format!("custom check errored: {e}")),
+            // A custom check that hangs (an infinite loop, a Promise that
+            // never resolves) shouldn't block every other check, or the
+            // whole tool, forever.
+            Err(_) => result(
+                &name,
+                Status::Warn,
+                format!("custom check timed out after {}s", CHECK_TIMEOUT.as_secs()),
+            ),
         });
     }
     Ok(results)
@@ -946,9 +1004,25 @@ mod tests {
     #[tokio::test]
     async fn run_safely_converts_an_error_into_a_warn_result_instead_of_propagating() {
         let failing = async { Err::<CheckResult, _>(anyhow::anyhow!("boom")) };
-        let outcome = run_safely("Some check", failing).await;
+        let outcome = run_safely("Some check", Duration::from_secs(5), failing).await;
         assert_eq!(outcome.name, "Some check");
         assert_eq!(outcome.status, Status::Warn);
         assert!(outcome.detail.contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn run_safely_converts_a_hang_into_a_warn_result_instead_of_blocking_forever() {
+        // A future that never resolves (an infinite JS loop, a Promise
+        // that never settles) used to hang run_all — and by extension
+        // the whole `monitor` run — indefinitely, with no way to recover.
+        let hangs = std::future::pending::<Result<CheckResult>>();
+        let outcome = run_safely("Some check", Duration::from_millis(50), hangs).await;
+        assert_eq!(outcome.name, "Some check");
+        assert_eq!(outcome.status, Status::Warn);
+        assert!(
+            outcome.detail.contains("timed out"),
+            "got: {}",
+            outcome.detail
+        );
     }
 }

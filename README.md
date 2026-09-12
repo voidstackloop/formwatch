@@ -108,6 +108,9 @@ The script must evaluate — directly, or via a `Promise` (an `async () =>
 {...}` IIFE works) — to `{ status: "Pass"|"Warn"|"Fail", detail }`. The
 check's name in reports comes from the filename, not anything the script
 returns. `formwatch init` writes a working copy of the example above.
+A script that never resolves (or any built-in check that hangs on an
+unusual page) times out after 20s and reports a Warn rather than
+blocking the rest of the run.
 
 ## Requirements
 
