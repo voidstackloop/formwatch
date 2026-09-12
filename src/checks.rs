@@ -139,6 +139,22 @@ fn visible_buttons_js() -> String {
 
 const LABEL_JS: &str = "b => (b.textContent.trim() || b.value || b.getAttribute('aria-label') || b.title || '').trim()";
 
+/// Matches "advance to the next step" wording. English plus a modest set
+/// of other major languages — not remotely exhaustive (full i18n
+/// coverage needs a translation database, not a regex), but every
+/// addition here can only ever recognize *more* valid Next buttons,
+/// never misclassify an unrelated one — unlike a structural
+/// "guess which lone button must be Next" heuristic, which could just as
+/// easily misclick an unrelated Cancel/Clear button. Non-Latin scripts
+/// are deliberately left outside the `\b` word-boundary group: JS `\b`
+/// is defined in terms of ASCII `\w`, so wrapping e.g. Arabic or Chinese
+/// text in `\b...\b` would silently never match at all.
+const NEXT_WORDS_JS: &str =
+    r"/\b(next|continue)\b|siguiente|continuar|suivant|weiter|nächste|próximo|التالي|下一步/i";
+
+/// Same idea as `NEXT_WORDS_JS`, for "submit the final step" wording.
+const FINAL_WORDS_JS: &str = r"/\b(submit|apply|finish|send|complete)\b|enviar|aplicar|finalizar|soumettre|envoyer|terminer|senden|abschicken|concluir|إرسال|提交/i";
+
 /// Classifies the visible action on the current step: "next" (Next/Continue
 /// — advance a multi-step wizard without submitting), "final" (Submit/
 /// Apply/Finish/... or a bare type=submit), or "none".
@@ -153,8 +169,8 @@ fn classify_action_js() -> String {
             // otherwise.
             const label = {LABEL_JS};
             const buttons = {buttons};
-            if (buttons.some(b => /\b(next|continue)\b/i.test(label(b)))) return 'next';
-            if (buttons.some(b => b.type === 'submit' || /\b(submit|apply|finish|send|complete)\b/i.test(label(b)))) return 'final';
+            if (buttons.some(b => {NEXT_WORDS_JS}.test(label(b)))) return 'next';
+            if (buttons.some(b => b.type === 'submit' || {FINAL_WORDS_JS}.test(label(b)))) return 'final';
             return 'none';
         }})()"#
     )
@@ -250,8 +266,10 @@ pub async fn check_submission_flow(page: &Page, allow_submit: bool) -> Result<Ch
                     .evaluate("document.body.innerText")
                     .await?
                     .into_value()?;
-                page.evaluate(click_matching_js(r"/\b(next|continue)\b/i.test(label(b))"))
-                    .await?;
+                page.evaluate(click_matching_js(&format!(
+                    "{NEXT_WORDS_JS}.test(label(b))"
+                )))
+                .await?;
                 tokio::time::sleep(Duration::from_millis(700)).await;
                 let after: String = page
                     .evaluate("document.body.innerText")
@@ -293,9 +311,9 @@ pub async fn check_submission_flow(page: &Page, allow_submit: bool) -> Result<Ch
                 }
 
                 let before_url: String = page.evaluate("location.href").await?.into_value()?;
-                page.evaluate(click_matching_js(
-                    r"b.type === 'submit' || /\b(submit|apply|finish|send|complete)\b/i.test(label(b))",
-                ))
+                page.evaluate(click_matching_js(&format!(
+                    "b.type === 'submit' || {FINAL_WORDS_JS}.test(label(b))"
+                )))
                 .await?;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 let after_url: String = page.evaluate("location.href").await?.into_value()?;

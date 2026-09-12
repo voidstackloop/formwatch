@@ -261,6 +261,26 @@ async fn keyup_gated_next_button_is_enabled_by_filling_the_field() {
 }
 
 #[tokio::test]
+async fn wizard_step_buttons_labeled_in_arabic_are_recognized() {
+    // fixtures/rtl-arabic-form.html's wizard uses Arabic wording
+    // ("التالي" = Next, "إرسال" = Submit) — regression test for the
+    // button classifier only recognizing English Next/Continue/Submit
+    // wording. Not full i18n coverage (that needs a translation
+    // database), just confirming the widened word list actually works
+    // end to end, not just in isolation.
+    let (_browser, page, _handle) = open_fixture("rtl-arabic-form.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow");
+    assert_eq!(result.status, checks::Status::Pass);
+    assert!(
+        result.detail.contains("Advanced through 1 step"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn multi_step_wizard_real_submit_reaches_the_thank_you_page() {
     let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
     let result = checks::check_submission_flow(&page, true)
