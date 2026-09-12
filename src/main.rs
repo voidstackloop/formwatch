@@ -367,3 +367,77 @@ fn print_report(history_dir: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use checks::{CheckResult, Status};
+
+    fn check(status: Status) -> CheckResult {
+        CheckResult {
+            name: "Accessibility".to_string(),
+            status,
+            detail: String::new(),
+        }
+    }
+
+    fn run(checks: Vec<CheckResult>) -> history::RunResult {
+        history::RunResult {
+            name: "x".into(),
+            url: "https://example.test/form".into(),
+            timestamp: 0,
+            checks,
+        }
+    }
+
+    #[test]
+    fn run_has_failure_is_true_only_when_a_check_actually_failed() {
+        // The exit code is the whole point of running this in CI — a Warn
+        // (or an all-Pass run) must exit 0, only a real Fail should turn
+        // CI red.
+        assert!(!run_has_failure(&run(vec![
+            check(Status::Pass),
+            check(Status::Warn)
+        ])));
+        assert!(run_has_failure(&run(vec![
+            check(Status::Pass),
+            check(Status::Fail)
+        ])));
+    }
+
+    #[test]
+    fn load_forms_config_parses_name_and_url_per_entry() {
+        let dir = std::env::temp_dir().join("formwatch-test-load-forms-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("forms.yml");
+        std::fs::write(
+            &path,
+            "forms:\n  - name: City Permit\n    url: https://city.gov/permit\n",
+        )
+        .expect("write config");
+
+        let cfg = load_forms_config(&path).expect("parse config");
+        assert_eq!(cfg.forms.len(), 1);
+        assert_eq!(cfg.forms[0].name, "City Permit");
+        assert_eq!(cfg.forms[0].url, "https://city.gov/permit");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_forms_config_fails_loudly_on_malformed_yaml_instead_of_silently_skipping() {
+        // main() turns this Err into any_fail = true specifically so a
+        // typo'd config doesn't produce a silently-green CI job — that
+        // contract only holds if parsing a broken file actually errors.
+        let dir = std::env::temp_dir().join("formwatch-test-load-forms-config-bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("forms.yml");
+        std::fs::write(&path, "not: [valid, forms.yml\n").expect("write config");
+
+        assert!(load_forms_config(&path).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
