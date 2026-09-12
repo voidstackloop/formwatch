@@ -4,11 +4,23 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// One complete run of every check against one form — what
+/// [`save_run`]/[`load_runs`] persist and load, and the JSON shape of
+/// `--json` output. This is also the community dashboard's data
+/// contract (`results/index.json`): changing this shape is a breaking
+/// change for anything reading history off disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
+    /// The form's label — from `--name`, a `forms.yml` entry's `name`,
+    /// or the URL itself if neither was given.
     pub name: String,
+    /// The URL that was checked. Also the key used to find this run's
+    /// history directory and to diff it against its previous run.
     pub url: String,
+    /// Unix timestamp (seconds) of when this run happened.
     pub timestamp: i64,
+    /// Every check's result, in the order `run_all`/`run_custom_checks`
+    /// produced them.
     pub checks: Vec<CheckResult>,
 }
 
@@ -38,6 +50,12 @@ fn dir_for(base: &Path, url: &str) -> PathBuf {
     base.join(slug(url))
 }
 
+/// Persists `run` under `base` (e.g. `.formwatch/history`, or whatever
+/// `--history-dir` points at), in a subdirectory keyed by its URL.
+/// Returns the path it was written to. Never overwrites an existing run:
+/// if a file for this exact timestamp already exists, appends a `-N`
+/// suffix instead, so two runs completing within the same wall-clock
+/// second don't silently clobber each other.
 pub fn save_run(base: &Path, run: &RunResult) -> Result<PathBuf> {
     let dir = dir_for(base, &run.url);
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -105,10 +123,18 @@ pub fn all_known_forms(base: &Path) -> Result<Vec<RunResult>> {
     Ok(latest)
 }
 
+/// One check's status change between two consecutive runs of the same
+/// form — what [`diff`] produces and what "Changed since previous run"
+/// (in both plain-text and `--html` output) is built from.
 #[derive(Debug, Clone)]
 pub struct CheckChange {
+    /// Which check changed status. Matched by name, not position, so
+    /// changes still make sense if checks are reordered or a new one is
+    /// added between runs.
     pub name: String,
+    /// The status it had in the older run.
     pub from: Status,
+    /// The status it has in the newer run.
     pub to: Status,
 }
 

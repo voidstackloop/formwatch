@@ -5,17 +5,38 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
+/// The outcome of one check. `Fail` means the check found a real problem
+/// with the form; `Warn` covers everything short of that — a heuristic
+/// that couldn't be conclusive, a check that couldn't complete, or a
+/// finding that's informational rather than a defect; `Pass` means the
+/// check found nothing wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
+    /// The check found nothing wrong.
     Pass,
+    /// Something worth a human's attention, but not a confirmed defect —
+    /// a heuristic limit, an inconclusive result, or a check that
+    /// couldn't complete (see `detail` for why).
     Warn,
+    /// The check found a real problem with the form.
     Fail,
 }
 
+/// One check's result: which check it was, what it found, and a
+/// human-readable detail string explaining the verdict. This is the
+/// unit [`crate::history`] persists and [`crate::report`] renders — the
+/// `name` is what ties a check to its history across separate runs, so
+/// it should stay stable once a check ships (renaming a built-in check,
+/// or a custom check's filename, effectively starts its history over).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckResult {
+    /// Which check produced this — a built-in check's fixed name (e.g.
+    /// "Accessibility"), or a custom check's filename stem.
     pub name: String,
+    /// The verdict.
     pub status: Status,
+    /// Human-readable explanation of the verdict — what was found, and
+    /// often the raw counts/booleans a report reader would want to see.
     pub detail: String,
 }
 
@@ -28,6 +49,8 @@ fn result(name: &str, status: Status, detail: impl Into<String>) -> CheckResult 
 }
 
 impl Status {
+    /// The uppercase label shown in terminal and plain-text report
+    /// output — `"PASS"`, `"WARN"`, or `"FAIL"`.
     pub fn label(&self) -> &'static str {
         match self {
             Status::Pass => "PASS",
@@ -36,6 +59,8 @@ impl Status {
         }
     }
 
+    /// The lowercase CSS class used for this status's badge in the HTML
+    /// report template.
     pub fn css_class(&self) -> &'static str {
         match self {
             Status::Pass => "pass",
@@ -855,6 +880,12 @@ async fn run_safely(
     }
 }
 
+/// Runs every built-in check against `page` and returns all of their
+/// results — always, even if one check errors or times out internally,
+/// or a real `--submit` navigates away from the form partway through.
+/// `wait_secs` is passed through to [`check_input_persistence`];
+/// `allow_submit` gates whether [`check_submission_flow`] clicks the
+/// real submit button.
 pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<CheckResult> {
     // An 8-step wizard, each step waiting up to STEP_TRANSITION_MAX_WAIT,
     // can legitimately take longer than the default CHECK_TIMEOUT.

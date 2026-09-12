@@ -4,16 +4,30 @@ use askama::Template;
 use chrono::DateTime;
 use std::path::Path;
 
+/// One form's entry in a report: its latest run, what changed since the
+/// run before that (empty if there wasn't one, or nothing changed), and
+/// a human-readable version of its timestamp.
 pub struct FormReport {
+    /// The form's most recent run.
     pub run: RunResult,
+    /// Per-check status changes since this form's previous run, if any.
     pub changes: Vec<CheckChange>,
+    /// `run.timestamp`, formatted for display (e.g. `"2026-09-11 14:30
+    /// UTC"`) rather than a raw Unix timestamp.
     pub when: String,
 }
 
+/// The full report model — every form formwatch has ever recorded a run
+/// for, newest-first. Renders as HTML via [`askama::Template`] using
+/// `templates/report.html`; the plain-text `formwatch report` command
+/// walks the same struct field-by-field instead of using this
+/// implementation.
 #[derive(Template)]
 #[template(path = "report.html")]
 pub struct ReportTemplate {
+    /// Every known form's latest run, each with its own diff.
     pub forms: Vec<FormReport>,
+    /// When this report was generated, formatted for display.
     pub generated_at: String,
 }
 
@@ -45,6 +59,8 @@ pub fn build(history_dir: &Path) -> Result<ReportTemplate> {
     })
 }
 
+/// Builds the report and renders it as a complete HTML page (what
+/// `formwatch report --html` writes to disk).
 pub fn render_html(history_dir: &Path) -> Result<String> {
     Ok(build(history_dir)?.render()?)
 }

@@ -70,6 +70,11 @@ pub async fn launch(headful: bool) -> Result<(Browser, JoinHandle<()>)> {
     Ok((browser, handle))
 }
 
+/// Opens `url` in a new page and waits for it to load. Returns `Err` if
+/// the page never loaded at all — including the case where Chrome
+/// "successfully" navigates to its own error interstitial (a DNS
+/// failure, connection refused, or blocked port), which callers should
+/// treat as the page genuinely being unreachable, not a real result.
 pub async fn open(browser: &Browser, url: &str) -> Result<Page> {
     let page = browser
         .new_page(url)

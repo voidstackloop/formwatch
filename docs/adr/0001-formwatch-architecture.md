@@ -1,6 +1,10 @@
 # ADR-0001: formwatch architecture
 
-**Status:** Proposed
+**Status:** Accepted and implemented. This records the decisions *made*
+at the start of the project — it isn't kept in sync with everything
+that's shipped since (new checks, timeout handling, concurrency,
+i18n coverage, etc.). For what's actually in the tool today, see
+[CHANGELOG.md](../../CHANGELOG.md) and the main [README](../../README.md).
 **Date:** 2026-09-11
 **Deciders:** salihyilboga13@gmail.com
 

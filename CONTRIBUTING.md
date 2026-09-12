@@ -49,6 +49,15 @@ Result<CheckResult>`, added to `run_all`. If what you need is specific to
 one form or organization rather than broadly useful, prefer a
 [custom check](README.md#custom-checks) instead — it needs no PR at all.
 
+## Documentation
+
+Every `pub` item in `src/` needs a `///` doc comment — `lib.rs` sets
+`#![warn(missing_docs)]`, and `clippy -D warnings` (already required
+above) turns that into a hard error, so an undocumented public item
+fails CI, not just a style nit. `cargo doc --no-deps --open` to read it
+rendered. If your change is user-visible, add a line to
+[CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section too.
+
 ## Scope
 
 See [docs/community-design.md](docs/community-design.md) for where this

@@ -12,6 +12,10 @@ formwatch monitor forms.yml
 formwatch report --html
 ```
 
+See [CHANGELOG.md](CHANGELOG.md) for what's shipped so far, and
+[docs/adr/0001-formwatch-architecture.md](docs/adr/0001-formwatch-architecture.md)
+for why it's built the way it is.
+
 ## What it checks
 
 - **Page load** — if the form doesn't load at all (unreachable, DNS
