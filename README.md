@@ -62,7 +62,9 @@ formwatch report --html
 - `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json]` — run
   `test` against every form across one or more YAML configs (a shell glob
   like `community-forms/**/*.yml` works — the shell expands it to
-  multiple arguments):
+  multiple arguments). Checks up to 4 forms at once (each gets its own
+  browser page — they can't interfere with each other) and prints
+  results in config order regardless of which one finishes first:
   ```yaml
   forms:
     - name: Business License Renewal

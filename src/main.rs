@@ -1,8 +1,19 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use formwatch::{browser, checks, history, report, runner};
+use futures::stream::{self, StreamExt};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
+
+/// How many forms `monitor` checks at once. Each form gets its own
+/// browser Page (an independent execution context — `TARGET_FORM_JS`'s
+/// per-page `window` state can't leak between forms the way it could
+/// have leaked between *checks on the same form*, which is why that fix
+/// was necessary but this one is safe), so running several concurrently
+/// is a straightforward wall-clock win. Bounded rather than unlimited to
+/// stay a good citizen — this checks real third-party government sites,
+/// not infrastructure formwatch controls.
+const MAX_CONCURRENT_FORMS: usize = 4;
 
 #[derive(Parser)]
 #[command(
@@ -179,23 +190,42 @@ async fn main() -> Result<()> {
             }
 
             let (browser, _handle) = browser::launch(headful).await?;
-            let mut runs = vec![];
-            for entry in entries {
-                match runner::run_one(
-                    &browser,
-                    &history_dir,
-                    entry.name.clone(),
-                    entry.url.clone(),
-                    submit,
-                    wait,
-                    checks_dir.as_deref(),
-                )
-                .await
-                {
-                    Ok(run) => runs.push(run),
-                    Err(e) => eprintln!("{}: {e:#}", format!("{} failed", entry.name).red()),
-                }
-            }
+            let checks_dir_ref = checks_dir.as_deref();
+            let mut indexed: Vec<(usize, history::RunResult)> =
+                stream::iter(entries.into_iter().enumerate())
+                    .map(|(i, entry)| {
+                        let browser = &browser;
+                        let history_dir = &history_dir;
+                        async move {
+                            match runner::run_one(
+                                browser,
+                                history_dir,
+                                entry.name.clone(),
+                                entry.url,
+                                submit,
+                                wait,
+                                checks_dir_ref,
+                            )
+                            .await
+                            {
+                                Ok(run) => Some((i, run)),
+                                Err(e) => {
+                                    eprintln!("{}: {e:#}", format!("{} failed", entry.name).red());
+                                    None
+                                }
+                            }
+                        }
+                    })
+                    .buffer_unordered(MAX_CONCURRENT_FORMS)
+                    .filter_map(|x| async move { x })
+                    .collect()
+                    .await;
+            // buffer_unordered completes in whichever order each form's
+            // checks finish, not config order — restore config order so
+            // "monitor a, b, c" doesn't print in a different order every
+            // run depending on network timing luck.
+            indexed.sort_by_key(|(i, _)| *i);
+            let runs: Vec<history::RunResult> = indexed.into_iter().map(|(_, r)| r).collect();
             if json {
                 println!("{}", serde_json::to_string_pretty(&runs)?);
                 any_fail |= runs.iter().any(run_has_failure);
