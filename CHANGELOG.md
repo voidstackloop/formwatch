@@ -118,6 +118,12 @@ the bug, not just reasoned about:
   reliably the first time `cargo test` ran on GitHub Actions' faster,
   more-parallel runner. Each launch now gets its own unique profile
   directory.
+- `formwatch report --out some/new/dir/file` (plain `--json` or
+  `--html`) failed with a bare "No such file or directory" if that
+  directory didn't exist yet — the same bug already fixed once for
+  `formwatch init subdir/file.yml`, in a command that fix never reached.
+  Found by the community-monitor workflow's own first real run, writing
+  to a `results/` directory nothing had created yet.
 
 ### Changed
 

@@ -247,13 +247,13 @@ async fn main() -> Result<()> {
         Command::Report { html, json, out } => {
             if html {
                 let path = out.unwrap_or_else(|| PathBuf::from("formwatch-report.html"));
-                std::fs::write(&path, report::render_html(&history_dir)?)?;
+                write_output(&path, &report::render_html(&history_dir)?)?;
                 println!("Wrote {}", path.display());
             } else if json {
                 let body = serde_json::to_string_pretty(&history::all_known_forms(&history_dir)?)?;
                 match out {
                     Some(path) => {
-                        std::fs::write(&path, body)?;
+                        write_output(&path, &body)?;
                         println!("Wrote {}", path.display());
                     }
                     None => println!("{body}"),
@@ -289,6 +289,20 @@ fn paced<S: stream::Stream>(
     })
 }
 
+/// Writes `contents` to `path`, creating its parent directory first if
+/// needed — `report --out some/new/dir/file.json` (or `--html`'s own
+/// `--out`) failing with a bare "No such file or directory" because
+/// nothing had created `some/new/dir/` yet is exactly the bug already
+/// fixed once for `formwatch init subdir/file.yml`; this is the same bug
+/// in a different command that fix never reached.
+fn write_output(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+}
+
 fn load_forms_config(path: &Path) -> Result<FormsConfig> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -302,12 +316,7 @@ fn init(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    std::fs::write(path, STARTER_FORMS_YML)
-        .with_context(|| format!("writing {}", path.display()))?;
+    write_output(path, STARTER_FORMS_YML)?;
     println!("Wrote {}", path.display());
 
     let checks_dir = Path::new("checks");
@@ -484,6 +493,25 @@ mod tests {
         std::fs::write(&path, "not: [valid, forms.yml\n").expect("write config");
 
         assert!(load_forms_config(&path).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_output_creates_a_new_directory_that_does_not_exist_yet() {
+        // Found via a real deploy: `formwatch report --json --out
+        // results/index.json` failed with a bare "No such file or
+        // directory" the very first time it ran against a fresh
+        // checkout, because nothing had created results/ yet — the same
+        // bug class already fixed once for `formwatch init
+        // subdir/file.yml`, in a command that fix never reached.
+        let dir = std::env::temp_dir().join("formwatch-test-write-output");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("index.json");
+
+        write_output(&path, "[]").expect("write_output should create nested/ itself");
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), "[]");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
