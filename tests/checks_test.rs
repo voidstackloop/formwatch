@@ -644,3 +644,60 @@ async fn closed_shadow_root_degrades_to_a_clean_no_form_found_not_a_crash() {
         result.detail
     );
 }
+
+#[tokio::test]
+async fn recaptcha_widget_on_a_real_form_warns_but_still_finds_the_form() {
+    // fixtures/recaptcha-widget-form.html has a real, testable form that
+    // also embeds a reCAPTCHA widget — common on real government forms.
+    // This should Warn (not Fail: it's not evidence the form is broken)
+    // and note the form itself was still found.
+    let (_browser, page, _handle) = open_fixture("recaptcha-widget-form.html").await;
+    let result = checks::check_bot_protection(&page)
+        .await
+        .expect("check_bot_protection");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("reCAPTCHA"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("form itself was still found"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn cloudflare_challenge_page_is_reported_as_blocking_not_a_broken_form() {
+    // fixtures/cloudflare-challenge-page.html mimics the full-page "Just
+    // a moment..." interstitial Cloudflare shows instead of the real
+    // site — no <form> at all, since access itself is blocked. Without
+    // this check, check_submission_flow's "No <form> element found"
+    // would be the only signal, misleadingly implying the form is broken
+    // rather than "automated testing got blocked before reaching it."
+    let (_browser, page, _handle) = open_fixture("cloudflare-challenge-page.html").await;
+    let result = checks::check_bot_protection(&page)
+        .await
+        .expect("check_bot_protection");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("Cloudflare challenge page"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("no form visible"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn ordinary_form_with_no_challenge_passes_bot_protection() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_bot_protection(&page)
+        .await
+        .expect("check_bot_protection");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Permit Application</title></head>
+<body>
+  <!-- A real form that also embeds a reCAPTCHA widget — common on real
+       government forms. The form itself is present and testable, but
+       real submission (--submit) would be blocked by the challenge. -->
+  <form>
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text">
+
+    <div class="g-recaptcha" data-sitekey="fake-key-for-testing"></div>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

@@ -61,6 +61,12 @@ for why it's built the way it is.
   checks the value is still there and whether the page started showing
   session-timeout wording. A real 15-30 minute timeout isn't waited out by
   default; pass a longer `--wait` to test that for real.
+- **Bot protection** — detects reCAPTCHA, hCaptcha, Cloudflare Turnstile, or
+  a generic "verify you're human" challenge. Never a Fail — none of this
+  is evidence the *form* is broken, a real person sails through a CAPTCHA
+  fine — but without this check, a page stuck behind Cloudflare's "Just a
+  moment..." interstitial just looks like "no `<form>` found," a real
+  finding with the wrong explanation.
 
 ## Commands
 

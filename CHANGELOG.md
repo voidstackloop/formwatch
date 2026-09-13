@@ -46,6 +46,12 @@ project doesn't have a release yet, so everything below is grouped under
   before reporting "Page load: Fail" — a transient DNS blip or dropped
   connection against a real site no longer gets mistaken for the form
   itself being down.
+- An eighth check, **Bot protection**: detects reCAPTCHA, hCaptcha,
+  Cloudflare Turnstile, or a generic "verify you're human" interstitial.
+  Never a Fail — none of this is evidence the form itself is broken, a
+  real person sails through a CAPTCHA fine — but without it, a page
+  stuck behind a challenge just looked like "No `<form>` element
+  found," a real finding with the wrong explanation.
 
 ### Fixed
 

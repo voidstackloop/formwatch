@@ -904,6 +904,84 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
     ))
 }
 
+/// Detects a bot-protection/CAPTCHA challenge (reCAPTCHA, hCaptcha,
+/// Cloudflare Turnstile, or a generic "verify you're human" interstitial)
+/// on the page. Never a Fail: none of this is evidence the *form* is
+/// broken — a real human, unlike a headless browser, sails through a
+/// CAPTCHA fine — it's a heuristic limit on what formwatch itself could
+/// verify, exactly the kind of thing `Status::Warn` exists for. Without
+/// this, a page sitting behind Cloudflare's "Just a moment..." challenge
+/// just looks like "No `<form>` element found": a real, misleading
+/// finding with the wrong explanation.
+pub async fn check_bot_protection(page: &Page) -> Result<CheckResult> {
+    let detail: String = page
+        .evaluate(
+            r#"(() => {
+                const title = document.title.toLowerCase();
+                const bodyText = document.body.innerText.toLowerCase();
+
+                const found = [];
+                if (document.querySelector('.g-recaptcha, iframe[src*="recaptcha"], script[src*="recaptcha"]')
+                    || typeof window.grecaptcha !== 'undefined') found.push('reCAPTCHA');
+                if (document.querySelector('.h-captcha, iframe[src*="hcaptcha"], script[src*="hcaptcha"]')
+                    || typeof window.hcaptcha !== 'undefined') found.push('hCaptcha');
+                if (document.querySelector('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]')) found.push('Cloudflare Turnstile');
+                const cloudflareChallengePage = title.includes('just a moment')
+                    || bodyText.includes('checking your browser')
+                    || bodyText.includes('checking if the site connection is secure');
+                if (cloudflareChallengePage) found.push('Cloudflare challenge page');
+                if (found.length === 0 && /verify you.{0,3}re (a )?human|are you a robot|prove you.{0,3}re not a robot|complete the (security check|challenge)/.test(bodyText)) {
+                    found.push('generic bot-check wording');
+                }
+
+                if (found.length === 0) return 'none';
+                const formStillPresent = document.querySelector('form') !== null;
+                const blocking = cloudflareChallengePage || !formStillPresent;
+                return JSON.stringify({ found, blocking });
+            })()"#,
+        )
+        .await?
+        .into_value()?;
+
+    if detail == "none" {
+        return Ok(result(
+            "Bot protection",
+            Status::Pass,
+            "No bot-protection challenge detected.",
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&detail)?;
+    let found: Vec<String> = parsed["found"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let blocking = parsed["blocking"].as_bool().unwrap_or(false);
+    let names = found.join(", ");
+
+    Ok(result(
+        "Bot protection",
+        Status::Warn,
+        if blocking {
+            format!(
+                "{names} detected, with no form visible — automated testing was likely blocked \
+                 before it ever reached the real form. This isn't evidence the form itself is \
+                 broken; a real user (unlike formwatch) would pass this challenge."
+            )
+        } else {
+            format!(
+                "{names} detected on the page. The form itself was still found and checked, but \
+                 real submission (--submit) will be blocked by the challenge — formwatch can't \
+                 and shouldn't try to solve it."
+            )
+        },
+    ))
+}
+
 /// Default ceiling for a single check — generous for a slow real-world
 /// page, but bounded. `check_submission_flow` gets its own longer
 /// ceiling (an 8-step wizard can legitimately take a while) and
@@ -1033,6 +1111,13 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
     }
 
     vec![
+        run_safely(
+            page,
+            "Bot protection",
+            CHECK_TIMEOUT,
+            check_bot_protection(page),
+        )
+        .await,
         submission,
         run_safely(
             page,
