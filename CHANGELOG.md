@@ -38,6 +38,14 @@ project doesn't have a release yet, so everything below is grouped under
   previous run `diff` compares against. A check that changed once and
   stayed changed is a genuine regression or fix, not flakiness — only
   the unstable, back-and-forth case gets the "Flaky" badge.
+- `monitor --delay-ms MS`: paces how fast new forms start (default 0 —
+  unchanged behavior), so a large `forms.yml` against real third-party
+  sites can spread its load out instead of firing up to
+  `MAX_CONCURRENT_FORMS` requests at once.
+- Page loads now retry up to 3 times with backoff (500ms, then 1s)
+  before reporting "Page load: Fail" — a transient DNS blip or dropped
+  connection against a real site no longer gets mistaken for the form
+  itself being down.
 
 ### Fixed
 

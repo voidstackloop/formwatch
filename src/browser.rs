@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chromiumoxide::{Browser, BrowserConfig, BrowserFetcher, BrowserFetcherOptions, Page};
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 
 /// Downloads a Chrome-for-Testing build into ~/.cache/formwatch/chrome. Only
@@ -116,12 +116,39 @@ pub async fn launch(headful: bool) -> Result<(Browser, JoinHandle<()>)> {
     Ok((browser, handle))
 }
 
-/// Opens `url` in a new page and waits for it to load. Returns `Err` if
-/// the page never loaded at all — including the case where Chrome
-/// "successfully" navigates to its own error interstitial (a DNS
+/// How many times [`open`] attempts to load a page before giving up. A
+/// real government site under real-world conditions can have a
+/// transient DNS blip or a dropped connection that has nothing to do
+/// with the form itself being broken — retrying a couple of times
+/// before reporting "Page load: Fail" avoids mistaking network noise
+/// for a real finding, without masking a form that's genuinely down
+/// (every attempt still has to fail for that to be reported).
+const OPEN_ATTEMPTS: u32 = 3;
+
+/// Backoff between attempts; doubles each retry (500ms, then 1s).
+const OPEN_RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Opens `url` in a new page and waits for it to load, retrying up to
+/// [`OPEN_ATTEMPTS`] times with backoff on failure. Returns `Err` only
+/// if every attempt failed to load at all — including the case where
+/// Chrome "successfully" navigates to its own error interstitial (a DNS
 /// failure, connection refused, or blocked port), which callers should
 /// treat as the page genuinely being unreachable, not a real result.
 pub async fn open(browser: &Browser, url: &str) -> Result<Page> {
+    let mut last_err = None;
+    for attempt in 0..OPEN_ATTEMPTS {
+        match open_once(browser, url).await {
+            Ok(page) => return Ok(page),
+            Err(e) => last_err = Some(e),
+        }
+        if attempt + 1 < OPEN_ATTEMPTS {
+            tokio::time::sleep(OPEN_RETRY_BACKOFF * 2u32.pow(attempt)).await;
+        }
+    }
+    Err(last_err.expect("loop runs at least once, always setting last_err on failure"))
+}
+
+async fn open_once(browser: &Browser, url: &str) -> Result<Page> {
     let page = browser
         .new_page(url)
         .await

@@ -76,6 +76,12 @@ enum Command {
         checks_dir: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+        /// Milliseconds to wait before starting each form's checks (0 = no
+        /// delay). A real-world courtesy knob for a large forms.yml against
+        /// third-party sites you don't control — spreads the load out
+        /// instead of firing up to MAX_CONCURRENT_FORMS requests at once.
+        #[arg(long, default_value_t = 0)]
+        delay_ms: u64,
     },
     /// Print (or render to HTML/JSON) the most recent run of every form formwatch knows about.
     Report {
@@ -172,6 +178,7 @@ async fn main() -> Result<()> {
             headful,
             checks_dir,
             json,
+            delay_ms,
         } => {
             let mut entries = vec![];
             for config in &configs {
@@ -191,35 +198,37 @@ async fn main() -> Result<()> {
 
             let (browser, _handle) = browser::launch(headful).await?;
             let checks_dir_ref = checks_dir.as_deref();
-            let mut indexed: Vec<(usize, history::RunResult)> =
-                stream::iter(entries.into_iter().enumerate())
-                    .map(|(i, entry)| {
-                        let browser = &browser;
-                        let history_dir = &history_dir;
-                        async move {
-                            match runner::run_one(
-                                browser,
-                                history_dir,
-                                entry.name.clone(),
-                                entry.url,
-                                submit,
-                                wait,
-                                checks_dir_ref,
-                            )
-                            .await
-                            {
-                                Ok(run) => Some((i, run)),
-                                Err(e) => {
-                                    eprintln!("{}: {e:#}", format!("{} failed", entry.name).red());
-                                    None
-                                }
-                            }
+            let mut indexed: Vec<(usize, history::RunResult)> = paced(
+                stream::iter(entries.into_iter().enumerate()),
+                std::time::Duration::from_millis(delay_ms),
+            )
+            .map(|(i, entry)| {
+                let browser = &browser;
+                let history_dir = &history_dir;
+                async move {
+                    match runner::run_one(
+                        browser,
+                        history_dir,
+                        entry.name.clone(),
+                        entry.url,
+                        submit,
+                        wait,
+                        checks_dir_ref,
+                    )
+                    .await
+                    {
+                        Ok(run) => Some((i, run)),
+                        Err(e) => {
+                            eprintln!("{}: {e:#}", format!("{} failed", entry.name).red());
+                            None
                         }
-                    })
-                    .buffer_unordered(MAX_CONCURRENT_FORMS)
-                    .filter_map(|x| async move { x })
-                    .collect()
-                    .await;
+                    }
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENT_FORMS)
+            .filter_map(|x| async move { x })
+            .collect()
+            .await;
             // buffer_unordered completes in whichever order each form's
             // checks finish, not config order — restore config order so
             // "monitor a, b, c" doesn't print in a different order every
@@ -259,6 +268,25 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Paces a stream so each item is only yielded `delay` after the item
+/// before it (a no-op pass-through when `delay` is zero) — used to
+/// spread `monitor`'s per-form checks out over time instead of firing
+/// up to `MAX_CONCURRENT_FORMS` requests at once, a real-world courtesy
+/// against third-party sites this tool doesn't control. A plain
+/// `buffer_unordered(N)` alone doesn't pace anything: it happily starts
+/// all N immediately, then refills as each one finishes.
+fn paced<S: stream::Stream>(
+    source: S,
+    delay: std::time::Duration,
+) -> impl stream::Stream<Item = S::Item> {
+    source.then(move |item| async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        item
+    })
 }
 
 fn load_forms_config(path: &Path) -> Result<FormsConfig> {
@@ -458,5 +486,38 @@ mod tests {
         assert!(load_forms_config(&path).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn paced_with_zero_delay_does_not_slow_the_stream() {
+        let start = std::time::Instant::now();
+        let items: Vec<i32> = paced(stream::iter(0..5), std::time::Duration::ZERO)
+            .collect()
+            .await;
+        assert_eq!(items, vec![0, 1, 2, 3, 4]);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "zero delay should add no meaningful wait, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn paced_with_a_delay_spaces_items_out() {
+        // --delay-ms is meant to spread monitor's per-form requests out
+        // over time, not just cap concurrency — this is the one property
+        // that actually distinguishes `paced` from a plain pass-through,
+        // so it's the one worth proving directly rather than trusting
+        // that `.then()` obviously does the right thing.
+        let delay = std::time::Duration::from_millis(30);
+        let start = std::time::Instant::now();
+        let items: Vec<i32> = paced(stream::iter(0..3), delay).collect().await;
+        assert_eq!(items, vec![0, 1, 2]);
+        assert!(
+            start.elapsed() >= delay * 3,
+            "expected at least {:?} total, took {:?}",
+            delay * 3,
+            start.elapsed()
+        );
     }
 }

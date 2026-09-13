@@ -21,9 +21,13 @@ for why it's built the way it is.
 - **Page load** — if the form doesn't load at all (unreachable, DNS
   failure, connection refused), that's reported as a single clear Fail
   rather than running — and being misled by — the rest of the checks
-  against Chrome's own error page. Likewise, if any individual check hits
-  a transient problem, it's reported as a Warn on just that check; one
-  check failing never loses the results of the others.
+  against Chrome's own error page. A load is retried a couple of times
+  with backoff first, so a transient network blip against a real
+  third-party site doesn't get misreported as the form itself being
+  down — every attempt still has to fail for that to be reported.
+  Likewise, if any individual check hits a transient problem, it's
+  reported as a Warn on just that check; one check failing never loses
+  the results of the others.
 - **Submission flow** — the form exists and is reachable. Fields are
   filled with plausible dummy data on each screen; if a step has a
   Next/Continue control (multi-step wizards are common for permit/license
@@ -63,12 +67,16 @@ for why it's built the way it is.
   custom-check mechanism below.
 - `formwatch test <url> [--name NAME] [--submit] [--wait SECS] [--headful]
   [--checks-dir DIR] [--json]` — run every check once against a single form.
-- `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json]` — run
-  `test` against every form across one or more YAML configs (a shell glob
-  like `community-forms/**/*.yml` works — the shell expands it to
-  multiple arguments). Checks up to 4 forms at once (each gets its own
-  browser page — they can't interfere with each other) and prints
-  results in config order regardless of which one finishes first:
+- `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json]
+  [--delay-ms MS]` — run `test` against every form across one or more
+  YAML configs (a shell glob like `community-forms/**/*.yml` works — the
+  shell expands it to multiple arguments). Checks up to 4 forms at once
+  (each gets its own browser page — they can't interfere with each
+  other) and prints results in config order regardless of which one
+  finishes first. `--delay-ms` (default 0) is a courtesy knob for a
+  large `forms.yml` against real third-party sites you don't control —
+  it paces how fast new forms start, spreading the load out instead of
+  firing up to 4 requests at once:
   ```yaml
   forms:
     - name: Business License Renewal
