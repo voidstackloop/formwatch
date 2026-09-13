@@ -224,6 +224,60 @@ async fn input_persistence_targets_the_real_form_not_a_header_search_box() {
 }
 
 #[tokio::test]
+async fn input_that_vanishes_with_no_explanation_is_a_fail() {
+    // fixtures/input-vanishes-form.html clears the field on its own,
+    // shortly after the user types, with nothing on the page explaining
+    // why — the core "lost input" scenario this check exists to catch,
+    // never directly asserted before (every other input-persistence test
+    // asserts the Pass path).
+    let (_browser, page, _handle) = open_fixture("input-vanishes-form.html").await;
+    let result = checks::check_input_persistence(&page, 1)
+        .await
+        .expect("check_input_persistence");
+    assert_eq!(result.status, checks::Status::Fail, "got: {result:?}");
+    assert!(
+        result.detail.contains("input retained=false"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn input_loss_explained_by_a_session_notice_is_a_warn_not_a_fail() {
+    // fixtures/session-timeout-warning-form.html surfaces a session-expiry
+    // notice — the site explaining an apparent loss should be a Warn, not
+    // the same Fail as a silent, unexplained one.
+    let (_browser, page, _handle) = open_fixture("session-timeout-warning-form.html").await;
+    let result = checks::check_input_persistence(&page, 1)
+        .await
+        .expect("check_input_persistence");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("session-timeout wording seen=true"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn no_text_field_to_test_is_reported_not_silently_skipped() {
+    // fixtures/no-text-field-form.html has only a checkbox and a select —
+    // check_input_persistence has nothing to plant a marker in and should
+    // say so plainly, rather than the caller mistaking a missing check for
+    // an untested-and-fine one.
+    let (_browser, page, _handle) = open_fixture("no-text-field-form.html").await;
+    let result = checks::check_input_persistence(&page, 1)
+        .await
+        .expect("check_input_persistence");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("No text field found to test"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn icon_only_next_button_is_recognized_via_aria_label() {
     // fixtures/icon-only-buttons.html's Next/Submit buttons have no text,
     // only an SVG icon child and aria-label — regression test for two

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Input Vanishes Silently</title></head>
+<body>
+  <!-- Simulates a real "lost input" bug: something on the page clears the
+       field shortly after the user types, with no explanation (no session
+       warning, nothing) — check_input_persistence should Fail on this. -->
+  <form>
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text">
+
+    <button type="submit">Submit</button>
+  </form>
+  <script>
+    setTimeout(() => {
+      document.getElementById('fullname').value = '';
+    }, 300);
+  </script>
+</body>
+</html>

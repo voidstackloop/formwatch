@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Session Timeout Warning</title></head>
+<body>
+  <!-- A page that explains an apparent loss instead of leaving the user
+       guessing — check_input_persistence should Warn (not Fail), since
+       the site itself is telling the user what happened. -->
+  <form>
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text">
+
+    <button type="submit">Submit</button>
+  </form>
+  <p id="notice" hidden>Your session has expired. Please log in again.</p>
+  <script>
+    setTimeout(() => {
+      document.getElementById('notice').hidden = false;
+    }, 300);
+  </script>
+</body>
+</html>

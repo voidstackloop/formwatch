@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>No Text Field</title></head>
+<body>
+  <!-- Nothing here is a text input or textarea — check_input_persistence
+       has no field to plant a marker in and should say so, not silently
+       report on the wrong element type. -->
+  <form>
+    <label><input type="checkbox" name="agree"> I agree to the terms</label>
+
+    <label for="permit-type">Permit type</label>
+    <select id="permit-type" name="permit-type">
+      <option value="residential">Residential</option>
+      <option value="commercial">Commercial</option>
+    </select>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
