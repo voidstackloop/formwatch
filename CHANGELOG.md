@@ -124,6 +124,13 @@ the bug, not just reasoned about:
   `formwatch init subdir/file.yml`, in a command that fix never reached.
   Found by the community-monitor workflow's own first real run, writing
   to a `results/` directory nothing had created yet.
+- `fixtures/input-vanishes-form.html`'s test was flaky on a loaded CI
+  runner: its `setTimeout` counted from page load, not from when
+  formwatch actually got around to writing its marker value, so a
+  slower machine could clear the field *before* the marker was ever
+  set — silently defeating the whole scenario instead of testing it.
+  Now waits for the field's own `input` event (which formwatch's own
+  marker-set dispatches) before scheduling the clear.
 
 ### Changed
 
