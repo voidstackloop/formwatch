@@ -1,4 +1,5 @@
 name: community-monitor
+# (touch to force GitHub to (re-)register this workflow)
 
 on:
   schedule:
