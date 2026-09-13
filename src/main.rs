@@ -312,22 +312,32 @@ fn print_run(history_dir: &Path, run: &history::RunResult, json: bool) -> Result
     }
 
     println!("\n{}", format!("== {} ({}) ==", run.name, run.url).bold());
+    let prior = history::load_runs(history_dir, &run.url)?;
+    let flaky = history::flakiness(&prior);
     for check in &run.checks {
-        print_check(check);
+        print_check(check, is_flaky(&flaky, check));
     }
 
-    let prior = history::load_runs(history_dir, &run.url)?;
     if let Some(prev) = prior.iter().rev().find(|r| r.timestamp < run.timestamp) {
         print_changes(&history::diff(prev, run));
     }
     Ok(run_has_failure(run))
 }
 
-fn print_check(check: &checks::CheckResult) {
+fn is_flaky(flaky: &[history::Flakiness], check: &checks::CheckResult) -> bool {
+    flaky.iter().any(|f| f.name == check.name && f.is_flaky())
+}
+
+fn print_check(check: &checks::CheckResult, flaky: bool) {
     let label = match check.status {
         checks::Status::Pass => check.status.label().green().to_string(),
         checks::Status::Warn => check.status.label().yellow().to_string(),
         checks::Status::Fail => check.status.label().red().to_string(),
+    };
+    let flaky_note = if flaky {
+        " [FLAKY]".yellow().to_string()
+    } else {
+        String::new()
     };
     let screenshot_note = if check.screenshot.is_some() {
         " (screenshot captured — see --html/--json report)"
@@ -335,7 +345,7 @@ fn print_check(check: &checks::CheckResult) {
         ""
     };
     println!(
-        "  [{label}] {}: {}{screenshot_note}",
+        "  [{label}] {}{flaky_note}: {}{screenshot_note}",
         check.name, check.detail
     );
 }
@@ -369,7 +379,7 @@ fn print_report(history_dir: &Path) -> Result<()> {
             format!("== {} ({}) ==", form.run.name, form.run.url).bold()
         );
         for check in &form.run.checks {
-            print_check(check);
+            print_check(check, form.flakiness_of(check).is_some());
         }
         print_changes(&form.changes);
     }

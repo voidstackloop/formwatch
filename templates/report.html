@@ -19,6 +19,7 @@
   .changes { padding: 0.5rem 1rem; font-size: 0.85rem; background: #fffbea; border-top: 1px solid #eee; }
   .changes ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
   .screenshot { max-width: 100%; max-height: 20rem; margin-top: 0.5rem; border: 1px solid #ddd; border-radius: 4px; display: block; }
+  .flaky-badge { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #eee; color: #555; }
 </style>
 </head>
 <body>
@@ -34,7 +35,11 @@
       <tr>
         <td><span class="badge {{ check.status.css_class() }}">{{ check.status.label() }}</span></td>
         <td>
-          <strong>{{ check.name }}</strong><br>{{ check.detail }}
+          <strong>{{ check.name }}</strong>
+          {% if let Some(f) = form.flakiness_of(check) %}
+          <span class="flaky-badge" title="Changed status {{ f.transitions }} times across recorded history">&#9888; Flaky</span>
+          {% endif %}
+          <br>{{ check.detail }}
           {% if let Some(shot) = check.screenshot %}
           <img class="screenshot" src="{{ shot }}" alt="{{ check.name }} screenshot">
           {% endif %}

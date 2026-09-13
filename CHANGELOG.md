@@ -32,6 +32,12 @@ project doesn't have a release yet, so everything below is grouped under
   already-changed page. A Pass carries no screenshot: it needs no
   evidence, and capturing one for every check on every run would just
   bloat history for no benefit.
+- Flakiness detection: `formwatch report` (plain-text and `--html`) now
+  flags a check whose status has flip-flopped across its *entire*
+  recorded history (2+ transitions), not just the single immediately-
+  previous run `diff` compares against. A check that changed once and
+  stayed changed is a genuine regression or fix, not flakiness — only
+  the unstable, back-and-forth case gets the "Flaky" badge.
 
 ### Fixed
 

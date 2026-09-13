@@ -94,6 +94,13 @@ the moment it finished, embedded directly in `--html`/`--json` output (a
 PASS carries none — it needs no evidence). The plain-text/colored output
 just notes that one was captured, since a terminal can't render it.
 
+`formwatch report` also looks across a form's *entire* recorded history
+(not just the single previous run) and flags any check whose status has
+flip-flopped rather than settling — a `[FLAKY]` note in plain text, a
+"⚠ Flaky" badge in `--html`. A check that changed once and stayed changed
+is a genuine regression or fix, not flakiness; only a check that's
+genuinely unstable across several runs gets flagged.
+
 ## Custom checks
 
 Anything specific to your forms that the built-in checks don't cover — a

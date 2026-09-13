@@ -156,6 +156,64 @@ pub fn diff(prev: &RunResult, curr: &RunResult) -> Vec<CheckChange> {
     changes
 }
 
+/// One check's behavior across a form's *entire* recorded history, not
+/// just the single most recent run — whether it's been flip-flopping
+/// between statuses rather than settling into one sustained state. A
+/// flaky check calls for a different response (investigate *why* it's
+/// inconsistent) than a genuine regression or fix (investigate the one
+/// real change); [`diff`] alone can't tell the two apart since it only
+/// ever compares two adjacent runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flakiness {
+    /// Which check this is — matched by name across every run, the same
+    /// way [`diff`] matches between two.
+    pub name: String,
+    /// How many times this check's status differed from the run right
+    /// before it, across every run recorded for the form. 0 means it's
+    /// never changed; 1 means a single sustained change (a genuine
+    /// regression or fix); 2 or more means it's genuinely flapping back
+    /// and forth, not settling into a state.
+    pub transitions: usize,
+    /// The status as of the most recent run.
+    pub current: Status,
+}
+
+impl Flakiness {
+    /// True once a check has changed status more than once across its
+    /// recorded history — flapping, not a single sustained change.
+    pub fn is_flaky(&self) -> bool {
+        self.transitions >= 2
+    }
+}
+
+/// Computes every check's transition count across `runs` (oldest first,
+/// as [`load_runs`] returns them) for one form. Only checks present in
+/// the most recent run are reported — a check that's since been removed
+/// (a custom check deleted, a built-in one renamed) has nothing current
+/// to report flakiness *of*.
+pub fn flakiness(runs: &[RunResult]) -> Vec<Flakiness> {
+    let Some(latest) = runs.last() else {
+        return vec![];
+    };
+    latest
+        .checks
+        .iter()
+        .map(|c| {
+            let history: Vec<Status> = runs
+                .iter()
+                .filter_map(|r| r.checks.iter().find(|x| x.name == c.name))
+                .map(|x| x.status)
+                .collect();
+            let transitions = history.windows(2).filter(|w| w[0] != w[1]).count();
+            Flakiness {
+                name: c.name.clone(),
+                transitions,
+                current: c.status,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +263,62 @@ mod tests {
         ]);
 
         assert!(diff(&prev, &curr).is_empty());
+    }
+
+    #[test]
+    fn flakiness_is_zero_for_a_check_that_never_changed() {
+        let runs = vec![
+            run(vec![check("Accessibility", Status::Pass)]),
+            run(vec![check("Accessibility", Status::Pass)]),
+            run(vec![check("Accessibility", Status::Pass)]),
+        ];
+        let report = flakiness(&runs);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].transitions, 0);
+        assert!(!report[0].is_flaky());
+    }
+
+    #[test]
+    fn flakiness_does_not_flag_a_single_sustained_regression() {
+        // diff() alone would call this "a regression" — which is exactly
+        // right here: it changed once and stayed changed. Flakiness is
+        // specifically about the *unstable* case diff can't see because
+        // it only ever compares two adjacent runs.
+        let runs = vec![
+            run(vec![check("Accessibility", Status::Pass)]),
+            run(vec![check("Accessibility", Status::Fail)]),
+            run(vec![check("Accessibility", Status::Fail)]),
+        ];
+        let report = flakiness(&runs);
+        assert_eq!(report[0].transitions, 1);
+        assert!(
+            !report[0].is_flaky(),
+            "a single sustained change is a real regression, not flakiness"
+        );
+    }
+
+    #[test]
+    fn flakiness_flags_a_check_that_flips_back_and_forth() {
+        let runs = vec![
+            run(vec![check("Accessibility", Status::Pass)]),
+            run(vec![check("Accessibility", Status::Fail)]),
+            run(vec![check("Accessibility", Status::Pass)]),
+            run(vec![check("Accessibility", Status::Fail)]),
+        ];
+        let report = flakiness(&runs);
+        assert_eq!(report[0].transitions, 3);
+        assert!(report[0].is_flaky());
+    }
+
+    #[test]
+    fn flakiness_only_reports_checks_present_in_the_latest_run() {
+        let runs = vec![
+            run(vec![check("Removed check", Status::Fail)]),
+            run(vec![check("Accessibility", Status::Pass)]),
+        ];
+        let report = flakiness(&runs);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].name, "Accessibility");
     }
 
     #[test]
