@@ -18,6 +18,7 @@
   .badge.fail { background: #c62828; }
   .changes { padding: 0.5rem 1rem; font-size: 0.85rem; background: #fffbea; border-top: 1px solid #eee; }
   .changes ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
+  .screenshot { max-width: 100%; max-height: 20rem; margin-top: 0.5rem; border: 1px solid #ddd; border-radius: 4px; display: block; }
 </style>
 </head>
 <body>
@@ -32,7 +33,12 @@
     {% for check in form.run.checks %}
       <tr>
         <td><span class="badge {{ check.status.css_class() }}">{{ check.status.label() }}</span></td>
-        <td><strong>{{ check.name }}</strong><br>{{ check.detail }}</td>
+        <td>
+          <strong>{{ check.name }}</strong><br>{{ check.detail }}
+          {% if let Some(shot) = check.screenshot %}
+          <img class="screenshot" src="{{ shot }}" alt="{{ check.name }} screenshot">
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>

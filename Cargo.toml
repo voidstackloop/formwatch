@@ -19,3 +19,4 @@ anyhow = "1"
 askama = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 owo-colors = "4"
+base64 = "0.23.1"

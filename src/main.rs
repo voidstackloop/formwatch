@@ -329,7 +329,15 @@ fn print_check(check: &checks::CheckResult) {
         checks::Status::Warn => check.status.label().yellow().to_string(),
         checks::Status::Fail => check.status.label().red().to_string(),
     };
-    println!("  [{label}] {}: {}", check.name, check.detail);
+    let screenshot_note = if check.screenshot.is_some() {
+        " (screenshot captured — see --html/--json report)"
+    } else {
+        ""
+    };
+    println!(
+        "  [{label}] {}: {}{screenshot_note}",
+        check.name, check.detail
+    );
 }
 
 fn print_changes(changes: &[history::CheckChange]) {
@@ -378,6 +386,7 @@ mod tests {
             name: "Accessibility".to_string(),
             status,
             detail: String::new(),
+            screenshot: None,
         }
     }
 

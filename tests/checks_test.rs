@@ -74,6 +74,37 @@ async fn single_page_fixture_catches_its_planted_bugs() {
 }
 
 #[tokio::test]
+async fn non_pass_checks_get_a_screenshot_and_pass_checks_dont() {
+    // fixtures/test-form.html's Accessibility check is a real Fail;
+    // its Submission flow check is a real Pass. A report reader needs
+    // to see evidence for the former without re-running formwatch
+    // against a possibly-already-changed page — but capturing one for
+    // every check regardless of outcome would just bloat history for
+    // no benefit.
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let results = checks::run_all(&page, false, 1).await;
+
+    let accessibility = find(&results, "Accessibility");
+    assert_eq!(accessibility.status, checks::Status::Fail);
+    let shot = accessibility
+        .screenshot
+        .as_deref()
+        .expect("a Fail should carry a screenshot");
+    assert!(
+        shot.starts_with("data:image/png;base64,"),
+        "got: {}",
+        &shot[..shot.len().min(40)]
+    );
+
+    let submission = find(&results, "Submission flow");
+    assert_eq!(submission.status, checks::Status::Pass);
+    assert!(
+        submission.screenshot.is_none(),
+        "a Pass shouldn't carry a screenshot"
+    );
+}
+
+#[tokio::test]
 async fn multi_step_wizard_is_walked_to_the_final_submit() {
     let (_browser, page, _handle) = open_fixture("multi-step-form.html").await;
     let result = checks::check_submission_flow(&page, false)

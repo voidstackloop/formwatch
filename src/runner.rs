@@ -29,6 +29,7 @@ pub async fn run_one(
                         name: "Custom checks".to_string(),
                         status: checks::Status::Warn,
                         detail: format!("couldn't run --checks-dir {}: {e:#}", dir.display()),
+                        screenshot: None,
                     }),
                 }
             }
@@ -39,6 +40,7 @@ pub async fn run_one(
             name: "Page load".to_string(),
             status: checks::Status::Fail,
             detail: format!("{e:#}"),
+            screenshot: None,
         }],
     };
 

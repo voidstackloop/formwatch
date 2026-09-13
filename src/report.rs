@@ -85,6 +85,7 @@ mod tests {
             name: "Accessibility".to_string(),
             status,
             detail: String::new(),
+            screenshot: None,
         };
         let older = RunResult {
             name: "x".into(),

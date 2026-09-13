@@ -38,6 +38,13 @@ pub struct CheckResult {
     /// Human-readable explanation of the verdict — what was found, and
     /// often the raw counts/booleans a report reader would want to see.
     pub detail: String,
+    /// A `data:image/png;base64,...` screenshot of the page at the moment
+    /// this check finished, present only when `status` isn't `Pass` — a
+    /// Pass needs no evidence, and capturing one for every check on every
+    /// run would bloat history for no benefit. `#[serde(default)]` so
+    /// history files written before this field existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
 }
 
 fn result(name: &str, status: Status, detail: impl Into<String>) -> CheckResult {
@@ -45,6 +52,7 @@ fn result(name: &str, status: Status, detail: impl Into<String>) -> CheckResult 
         name: name.to_string(),
         status,
         detail: detail.into(),
+        screenshot: None,
     }
 }
 
@@ -903,6 +911,27 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
 /// user-requested `--wait`, rather than sharing this default.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Captures a full-page PNG screenshot as a ready-to-embed
+/// `data:image/png;base64,...` URI. Best-effort: a screenshot is
+/// supporting evidence, not the check result itself, so a capture
+/// failure (e.g. a page that navigated away mid-check) returns `None`
+/// rather than turning a real check result into an error.
+async fn capture_screenshot(page: &Page) -> Option<String> {
+    use base64::Engine;
+    let png = page
+        .screenshot(
+            chromiumoxide::page::ScreenshotParams::builder()
+                .full_page(true)
+                .build(),
+        )
+        .await
+        .ok()?;
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    ))
+}
+
 /// Runs one check's future to completion, converting an Err *or* a hang
 /// past `timeout` into a Warn result instead of letting it propagate or
 /// block forever. `run_all` checks many real-world pages unattended
@@ -912,7 +941,12 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 /// erase every other check's result for that form, or hang the whole
 /// tool indefinitely — previously there was no timeout anywhere in the
 /// check engine at all.
-async fn run_safely(
+///
+/// Pure conversion logic, deliberately kept separate from [`run_safely`]
+/// so its error/timeout-handling can be unit tested without a real Page
+/// (a synthetic future is enough) — [`run_safely`]'s extra step of
+/// capturing a screenshot genuinely needs one.
+async fn run_with_timeout(
     name: &str,
     timeout: Duration,
     fut: impl std::future::Future<Output = Result<CheckResult>>,
@@ -929,6 +963,24 @@ async fn run_safely(
             ),
         ),
     }
+}
+
+/// [`run_with_timeout`], additionally attaching a screenshot to any
+/// non-Pass result (a real Fail/Warn, or a synthetic one from
+/// `run_with_timeout`'s own error/timeout branches) — a report reader
+/// shouldn't have to re-run formwatch against a possibly-already-changed
+/// page just to see what the check actually saw.
+async fn run_safely(
+    page: &Page,
+    name: &str,
+    timeout: Duration,
+    fut: impl std::future::Future<Output = Result<CheckResult>>,
+) -> CheckResult {
+    let mut check = run_with_timeout(name, timeout, fut).await;
+    if check.status != Status::Pass {
+        check.screenshot = capture_screenshot(page).await;
+    }
+    check
 }
 
 /// Runs every built-in check against `page` and returns all of their
@@ -967,6 +1019,7 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
     };
 
     let submission = run_safely(
+        page,
         "Submission flow",
         WIZARD_TIMEOUT,
         check_submission_flow(page, allow_submit),
@@ -981,27 +1034,43 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
 
     vec![
         submission,
-        run_safely("Accessibility", CHECK_TIMEOUT, check_accessibility(page)).await,
         run_safely(
+            page,
+            "Accessibility",
+            CHECK_TIMEOUT,
+            check_accessibility(page),
+        )
+        .await,
+        run_safely(
+            page,
             "Mobile usability",
             CHECK_TIMEOUT,
             check_mobile_usability(page),
         )
         .await,
         run_safely(
+            page,
             "Validation errors",
             CHECK_TIMEOUT,
             check_validation_errors(page),
         )
         .await,
         run_safely(
+            page,
             "Required documents",
             CHECK_TIMEOUT,
             check_required_documents(page),
         )
         .await,
-        run_safely("Autofill hints", CHECK_TIMEOUT, check_autofill_hints(page)).await,
         run_safely(
+            page,
+            "Autofill hints",
+            CHECK_TIMEOUT,
+            check_autofill_hints(page),
+        )
+        .await,
+        run_safely(
+            page,
             "Input persistence",
             input_persistence_timeout,
             check_input_persistence(page, wait_secs),
@@ -1046,7 +1115,7 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
             })
             .await;
 
-        results.push(match outcome {
+        let mut check = match outcome {
             Ok(Ok(value)) => match value.get("status").and_then(|s| s.as_str()) {
                 Some("Pass") => result(&name, Status::Pass, detail_of(&value)),
                 Some("Warn") => result(&name, Status::Warn, detail_of(&value)),
@@ -1066,7 +1135,11 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
                 Status::Warn,
                 format!("custom check timed out after {}s", CHECK_TIMEOUT.as_secs()),
             ),
-        });
+        };
+        if check.status != Status::Pass {
+            check.screenshot = capture_screenshot(page).await;
+        }
+        results.push(check);
     }
     Ok(results)
 }
@@ -1084,21 +1157,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn run_safely_converts_an_error_into_a_warn_result_instead_of_propagating() {
+    async fn run_with_timeout_converts_an_error_into_a_warn_result_instead_of_propagating() {
         let failing = async { Err::<CheckResult, _>(anyhow::anyhow!("boom")) };
-        let outcome = run_safely("Some check", Duration::from_secs(5), failing).await;
+        let outcome = run_with_timeout("Some check", Duration::from_secs(5), failing).await;
         assert_eq!(outcome.name, "Some check");
         assert_eq!(outcome.status, Status::Warn);
         assert!(outcome.detail.contains("boom"));
     }
 
     #[tokio::test]
-    async fn run_safely_converts_a_hang_into_a_warn_result_instead_of_blocking_forever() {
+    async fn run_with_timeout_converts_a_hang_into_a_warn_result_instead_of_blocking_forever() {
         // A future that never resolves (an infinite JS loop, a Promise
         // that never settles) used to hang run_all — and by extension
         // the whole `monitor` run — indefinitely, with no way to recover.
         let hangs = std::future::pending::<Result<CheckResult>>();
-        let outcome = run_safely("Some check", Duration::from_millis(50), hangs).await;
+        let outcome = run_with_timeout("Some check", Duration::from_millis(50), hangs).await;
         assert_eq!(outcome.name, "Some check");
         assert_eq!(outcome.status, Status::Warn);
         assert!(

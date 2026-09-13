@@ -25,6 +25,13 @@ project doesn't have a release yet, so everything below is grouped under
   (Linux/macOS/Windows binaries on a version tag).
 - Full rustdoc coverage of the public API, enforced going forward via
   `#![warn(missing_docs)]`.
+- Every check that comes back Fail or Warn (including a custom check)
+  now carries a full-page screenshot of the moment it finished, embedded
+  in `--html`/`--json` output — a report reader can see what the check
+  actually saw without re-running formwatch against a possibly-
+  already-changed page. A Pass carries no screenshot: it needs no
+  evidence, and capturing one for every check on every run would just
+  bloat history for no benefit.
 
 ### Fixed
 

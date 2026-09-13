@@ -165,6 +165,7 @@ mod tests {
             name: name.to_string(),
             status,
             detail: String::new(),
+            screenshot: None,
         }
     }
 
