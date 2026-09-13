@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Shadow DOM Form</title></head>
+<body>
+  <!-- The actual form lives inside an OPEN shadow root on a custom
+       element, the way many modern government-site design systems render
+       forms — plain document.querySelectorAll('form') can't see into it
+       at all; this is the real case formwatch's deep-query fix targets. -->
+  <div id="host"></div>
+  <script>
+    const host = document.getElementById('host');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <form>
+        <label for="fullname">Full name</label>
+        <input id="fullname" name="fullname" type="text" required>
+
+        <label for="id-scan">Upload a scan of your ID (PDF, max 5MB)</label>
+        <input type="file" id="id-scan" name="idfile">
+
+        <button type="submit" style="width:20px;height:20px;font-size:8px;">Go</button>
+      </form>
+    `;
+    shadow.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      shadow.innerHTML += '<p>Thank you, your application was received.</p>';
+    });
+  </script>
+</body>
+</html>

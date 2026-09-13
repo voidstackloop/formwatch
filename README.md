@@ -147,9 +147,12 @@ not deployed.
   controls are labeled in some other language won't be walked past the
   first step — it'll report "found no Next/Continue or submit button"
   even though the form works fine for a real user in that language.
-- Every check operates on regular DOM (`document.querySelectorAll`).
-  Content inside a Shadow DOM or an `<iframe>` is invisible — a form
-  built with web components will report "No `<form>` element found"
-  rather than a real result. This shows up as a loud, unambiguous
-  failure rather than a misleading pass, but it's still a coverage gap
-  worth knowing about for component-library-based sites.
+- A form rendered inside an *open* shadow root (common in modern
+  government-site design systems built on web components) is found and
+  checked normally — every selector-based lookup pierces open shadow
+  roots. A *closed* shadow root remains genuinely invisible (that's the
+  platform's own encapsulation working as designed, not a formwatch
+  gap — a closed root can't be inspected from outside by any tool), and
+  a cross-origin `<iframe>` remains out of reach (a separate browsing
+  context this page's JS has no access to at all). Both show up as a
+  loud "No `<form>` element found" rather than a misleading pass.

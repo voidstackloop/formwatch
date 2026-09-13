@@ -82,6 +82,13 @@ the bug, not just reasoned about:
   its own private temp directory and atomically renames it into place;
   whichever caller loses that race discards its own copy instead of
   colliding with the winner's.
+- A form (or field, or label) rendered inside an *open* shadow root —
+  common in modern government-site design systems built on web
+  components — was completely invisible to every check, which reported
+  "No `<form>` element found" as if the page had no form at all. Every
+  selector-based lookup now pierces open shadow roots. Closed shadow
+  roots and cross-origin `<iframe>`s remain genuinely out of reach (real
+  platform limits, not gaps), and are documented as such.
 
 ### Changed
 

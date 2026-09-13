@@ -76,6 +76,31 @@ impl std::fmt::Display for Status {
     }
 }
 
+/// Recursively finds every element under `root` matching `sel`, descending
+/// into *open* shadow roots as well as regular light-DOM children — plain
+/// `querySelectorAll` only ever sees the latter, since a shadow root is by
+/// design invisible to selectors run from outside it. A form (or a field,
+/// or a label) rendered inside a web component's shadow DOM — common in
+/// modern government-site design systems — was previously indistinguishable
+/// from a form that plain didn't exist: every check saw an empty page.
+///
+/// This can't and doesn't reach into a *closed* shadow root (the platform's
+/// own encapsulation, deliberately impossible to inspect from outside) or
+/// across into a cross-origin `<iframe>` (a separate browsing context this
+/// page's JS has no access to at all) — both are real, permanent limits,
+/// not bugs, and are called out in the README rather than silently
+/// mishandled.
+const DEEP_QUERY_JS: &str = "(root, sel) => {
+    const out = [];
+    const visit = (node) => {
+        if (node.matches && node.matches(sel)) out.push(node);
+        if (node.shadowRoot) for (const c of node.shadowRoot.children) visit(c);
+        for (const c of node.children) visit(c);
+    };
+    visit(root);
+    return out;
+}";
+
 /// Resolves to "the form under test": the `<form>` with the most input/
 /// select/textarea descendants, not just the first one in document order.
 /// A real page often has an incidental header/footer search box as its
@@ -85,13 +110,35 @@ impl std::fmt::Display for Status {
 /// session and cached on `window` so every check agrees on the same
 /// form, and so "the form disappeared" means specifically this form is
 /// gone, not merely that some other form on the page still exists.
+///
+/// Searches with a self-contained copy of [`DEEP_QUERY_JS`]'s logic (not a
+/// spliced-in reference to it — this string is used verbatim by callers
+/// that also need to embed `DEEP_QUERY_JS` itself alongside it, and Rust's
+/// `format!` can't nest one captured `const` inside another) so a form
+/// living inside a web component's open shadow root is found at all.
 const TARGET_FORM_JS: &str = "(() => {
     if (window.__formwatchFormPicked) {
-        return document.contains(window.__formwatchForm) ? window.__formwatchForm : null;
+        // Not document.contains(): that's defined in terms of ordinary
+        // (non-shadow-including) descendants, so it's false for a form
+        // living inside an open shadow root even while the form is very
+        // much still on the page — isConnected is the one DOM primitive
+        // that's actually shadow-aware, walking the shadow-including root
+        // chain up to the document.
+        return window.__formwatchForm?.isConnected ? window.__formwatchForm : null;
     }
     window.__formwatchFormPicked = true;
-    const forms = Array.from(document.querySelectorAll('form'));
-    forms.sort((a, b) => b.querySelectorAll('input, select, textarea').length - a.querySelectorAll('input, select, textarea').length);
+    const deepQueryAll = (root, sel) => {
+        const out = [];
+        const visit = (node) => {
+            if (node.matches && node.matches(sel)) out.push(node);
+            if (node.shadowRoot) for (const c of node.shadowRoot.children) visit(c);
+            for (const c of node.children) visit(c);
+        };
+        visit(root);
+        return out;
+    };
+    const forms = deepQueryAll(document, 'form');
+    forms.sort((a, b) => deepQueryAll(b, 'input, select, textarea').length - deepQueryAll(a, 'input, select, textarea').length);
     window.__formwatchForm = forms[0] ?? null;
     return window.__formwatchForm;
 })()";
@@ -104,7 +151,7 @@ async fn fill_form_fields(page: &Page) -> Result<usize> {
         .evaluate(format!(
             r#"(() => {{
                 const form = {TARGET_FORM_JS};
-                const fields = form ? form.querySelectorAll('input, textarea, select') : [];
+                const fields = form ? ({DEEP_QUERY_JS})(form, 'input, textarea, select') : [];
                 let count = 0;
                 for (const el of fields) {{
                     if (el.disabled || el.type === 'hidden' || el.type === 'submit' || el.type === 'button' || el.type === 'file') continue;
@@ -189,7 +236,7 @@ async fn wait_for_text_change(page: &Page, before: &str, max_wait: Duration) -> 
 /// could get misclassified as this form's Next/submit control.
 fn visible_buttons_js() -> String {
     format!(
-        "(() => {{ const f = {TARGET_FORM_JS}; return f ? Array.from(f.querySelectorAll('button, input[type=submit], input[type=button]')).filter(b => b.offsetParent !== null) : []; }})()"
+        "(() => {{ const f = {TARGET_FORM_JS}; return f ? ({DEEP_QUERY_JS})(f, 'button, input[type=submit], input[type=button]').filter(b => b.offsetParent !== null) : []; }})()"
     )
 }
 
@@ -489,18 +536,18 @@ pub async fn check_mobile_usability(page: &Page) -> Result<CheckResult> {
             .into_value()?;
 
         let small_targets: i64 = page
-            .evaluate(
-                r#"(() => {
-                    const els = document.querySelectorAll('a, button, input, select, textarea');
+            .evaluate(format!(
+                r#"(() => {{
+                    const els = ({DEEP_QUERY_JS})(document, 'a, button, input, select, textarea');
                     let small = 0;
-                    for (const el of els) {
+                    for (const el of els) {{
                         const r = el.getBoundingClientRect();
                         if (r.width === 0 && r.height === 0) continue;
                         if (r.width < 44 || r.height < 44) small += 1;
-                    }
+                    }}
                     return small;
-                })()"#,
-            )
+                }})()"#,
+            ))
             .await?
             .into_value()?;
 
@@ -549,7 +596,7 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
         .evaluate(format!(
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
-                const el = f?.querySelector('input[type=text], input:not([type]), textarea');
+                const el = f ? ({DEEP_QUERY_JS})(f, 'input[type=text], input:not([type]), textarea')[0] : undefined;
                 if (!el) return false;
                 el.value = '{marker}';
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
@@ -571,7 +618,11 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
 
     let still_there: bool = page
         .evaluate(format!(
-            "({TARGET_FORM_JS})?.querySelector('input[type=text], input:not([type]), textarea')?.value === '{marker}'"
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                const el = f ? ({DEEP_QUERY_JS})(f, 'input[type=text], input:not([type]), textarea')[0] : undefined;
+                return el?.value === '{marker}';
+            }})()"#
         ))
         .await?
         .into_value()?;
@@ -616,7 +667,7 @@ pub async fn check_input_persistence(page: &Page, wait_secs: u64) -> Result<Chec
 pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
     let required_count: i64 = page
         .evaluate(format!(
-            "(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('[required], [aria-required=true]').length : 0; }})()"
+            "(() => {{ const f = {TARGET_FORM_JS}; return f ? ({DEEP_QUERY_JS})(f, '[required], [aria-required=true]').length : 0; }})()"
         ))
         .await?
         .into_value()?;
@@ -627,7 +678,7 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
     // them. Tracked separately so an all-aria-required form doesn't get
     // a false Pass just because nothing native-invalid was found.
     let native_required_count: i64 = page
-        .evaluate(format!("(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('[required]').length : 0; }})()"))
+        .evaluate(format!("(() => {{ const f = {TARGET_FORM_JS}; return f ? ({DEEP_QUERY_JS})(f, '[required]').length : 0; }})()"))
         .await?
         .into_value()?;
 
@@ -640,7 +691,7 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
                 if (!f) return false;
-                const req = f.querySelector('[required], [aria-required=true]');
+                const req = ({DEEP_QUERY_JS})(f, '[required], [aria-required=true]')[0];
                 if (req) {{
                     if (req.type === 'checkbox' || req.type === 'radio') {{
                         req.checked = false;
@@ -662,7 +713,7 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
                 if (!f) return 0;
-                const invalid = f.querySelectorAll(':invalid, [aria-invalid=true]');
+                const invalid = ({DEEP_QUERY_JS})(f, ':invalid, [aria-invalid=true]');
                 let unlabeled = 0;
                 for (const el of invalid) {{
                     const describedBy = el.getAttribute('aria-describedby');
@@ -722,7 +773,7 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
 
     let file_inputs: i64 = page
         .evaluate(format!(
-            "(() => {{ const f = {TARGET_FORM_JS}; return f ? f.querySelectorAll('input[type=file]').length : 0; }})()"
+            "(() => {{ const f = {TARGET_FORM_JS}; return f ? ({DEEP_QUERY_JS})(f, 'input[type=file]').length : 0; }})()"
         ))
         .await?
         .into_value()?;
@@ -747,13 +798,13 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
         .evaluate(format!(
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
-                const inputs = f ? f.querySelectorAll('input[type=file]') : [];
+                const inputs = f ? ({DEEP_QUERY_JS})(f, 'input[type=file]') : [];
                 let unlabeled = 0;
                 for (const el of inputs) {{
                     // Not a `label[for="${{el.id}}"]` selector: an id containing a
                     // double quote (legal in HTML) breaks that selector with a
                     // DOMException instead of just not matching.
-                    const byFor = el.id && Array.from(document.querySelectorAll('label')).find((l) => l.htmlFor === el.id)?.textContent.trim();
+                    const byFor = el.id && ({DEEP_QUERY_JS})(document, 'label').find((l) => l.htmlFor === el.id)?.textContent.trim();
                     const byWrap = el.closest('label')?.textContent.trim();
                     const byAria = el.getAttribute('aria-label');
                     if (!byFor && !byWrap && !byAria) unlabeled += 1;
@@ -768,7 +819,7 @@ pub async fn check_required_documents(page: &Page) -> Result<CheckResult> {
         .evaluate(format!(
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
-                const inputs = f ? f.querySelectorAll('input[type=file]') : [];
+                const inputs = f ? ({DEEP_QUERY_JS})(f, 'input[type=file]') : [];
                 let missing = 0;
                 for (const el of inputs) {{
                     if (el.hasAttribute('accept')) continue;
@@ -810,14 +861,14 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
             r#"(() => {{
                 const guesses = [/name/i, /e-?mail/i, /tel|phone/i, /postal|zip/i, /address/i];
                 const f = {TARGET_FORM_JS};
-                const fields = f ? f.querySelectorAll(
+                const fields = f ? ({DEEP_QUERY_JS})(f,
                     'input[type=text], input[type=email], input[type=tel], input:not([type])'
                 ) : [];
                 let missing = 0;
                 for (const el of fields) {{
                     if (el.disabled || el.offsetParent === null || el.hasAttribute('autocomplete')) continue;
                     const label = (
-                        Array.from(document.querySelectorAll('label')).find((l) => l.htmlFor === el.id)?.textContent
+                        ({DEEP_QUERY_JS})(document, 'label').find((l) => l.htmlFor === el.id)?.textContent
                         || el.name
                         || el.id
                         || ''

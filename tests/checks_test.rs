@@ -523,3 +523,42 @@ async fn run_custom_checks_runs_every_script_and_names_by_filename() {
         malformed.detail
     );
 }
+
+#[tokio::test]
+async fn form_inside_an_open_shadow_root_is_found_and_checked() {
+    // fixtures/shadow-dom-form.html renders its actual <form> inside an
+    // open shadow root on a custom element — the way many modern
+    // government-site design systems structure forms. Plain
+    // document.querySelectorAll('form') can't see into a shadow root at
+    // all, so before the deep-query fix every check here silently saw an
+    // empty page (0 fields, 0 required, no upload field) instead of a
+    // real result.
+    let (_browser, page, _handle) = open_fixture("shadow-dom-form.html").await;
+    let results = checks::run_all(&page, false, 1).await;
+
+    let submission = find(&results, "Submission flow");
+    assert_eq!(
+        submission.status,
+        checks::Status::Pass,
+        "got: {submission:?}"
+    );
+    assert!(
+        submission.detail.contains("filled 1 field"),
+        "expected the shadow-rooted text field to be found and filled, got: {}",
+        submission.detail
+    );
+
+    let validation = find(&results, "Validation errors");
+    assert!(
+        validation.detail.starts_with("1 required field(s)"),
+        "expected the shadow-rooted required field to be counted, got: {}",
+        validation.detail
+    );
+
+    let documents = find(&results, "Required documents");
+    assert!(
+        documents.detail.starts_with("1 upload field(s)"),
+        "expected the shadow-rooted file input to be found, got: {}",
+        documents.detail
+    );
+}
