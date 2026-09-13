@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Nested Shadow DOM Form</title></head>
+<body>
+  <!-- Two levels of open shadow root: the <form> lives in the outer
+       component's shadow root, but its own required field lives inside a
+       SECOND, inner component's shadow root nested inside the form. This
+       is what actually exercises the deep-query helper's recursion —
+       fixtures/shadow-dom-form.html only has one level of nesting, so it
+       couldn't tell a correct unbounded-depth walk from one that just
+       happens to handle a single hop. -->
+  <div id="outer-host"></div>
+  <script>
+    const outerHost = document.getElementById('outer-host');
+    const outerShadow = outerHost.attachShadow({ mode: 'open' });
+    outerShadow.innerHTML = `
+      <form>
+        <div id="inner-host"></div>
+        <button type="submit">Go</button>
+      </form>
+    `;
+    const innerHost = outerShadow.getElementById('inner-host');
+    const innerShadow = innerHost.attachShadow({ mode: 'open' });
+    innerShadow.innerHTML = `
+      <label for="fullname">Full name</label>
+      <input id="fullname" name="fullname" type="text" required>
+    `;
+    outerShadow.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      outerShadow.innerHTML += '<p>Thank you, your application was received.</p>';
+    });
+  </script>
+</body>
+</html>

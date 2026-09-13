@@ -562,3 +562,54 @@ async fn form_inside_an_open_shadow_root_is_found_and_checked() {
         documents.detail
     );
 }
+
+#[tokio::test]
+async fn deep_query_recurses_through_two_levels_of_nested_shadow_roots() {
+    // fixtures/nested-shadow-dom-form.html nests a second open shadow
+    // root *inside* the first one's <form> — the outer host has a shadow
+    // root containing the form, and the form itself contains another
+    // host whose own shadow root contains the actual required field.
+    //
+    // shadow-dom-form.html's single level of nesting doesn't actually
+    // exercise DEEP_QUERY_JS's own shadow-crossing at all: once
+    // TARGET_FORM_JS's separate, self-contained copy of the walk resolves
+    // `f`, the input is a same-tree descendant of `f` (both directly in
+    // shadow root #1), so a plain non-shadow-aware querySelectorAll
+    // starting at `f` would already find it. Only a *second*, independent
+    // shadow root nested inside the form — as here — requires
+    // DEEP_QUERY_JS itself (used by check_validation_errors and friends,
+    // called with `f` as the root, not `document`) to actually cross a
+    // shadow boundary. Confirmed by temporarily stripping DEEP_QUERY_JS's
+    // shadow-crossing entirely: shadow-dom-form.html's test still passed
+    // (as predicted), while this one failed.
+    let (_browser, page, _handle) = open_fixture("nested-shadow-dom-form.html").await;
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    assert!(
+        result.detail.starts_with("1 required field(s)"),
+        "expected the doubly-nested required field to be found, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn closed_shadow_root_degrades_to_a_clean_no_form_found_not_a_crash() {
+    // fixtures/closed-shadow-dom-form.html's form lives inside a CLOSED
+    // shadow root — genuinely, deliberately impossible to inspect from
+    // outside (the platform's own encapsulation, not a formwatch gap).
+    // The deep-query walk's `if (node.shadowRoot)` guard should simply
+    // skip it (a closed root's `.shadowRoot` getter returns null to
+    // outside code), degrading to an honest "no form found" rather than
+    // throwing partway through a check.
+    let (_browser, page, _handle) = open_fixture("closed-shadow-dom-form.html").await;
+    let result = checks::check_submission_flow(&page, false)
+        .await
+        .expect("check_submission_flow should not error, just report no form");
+    assert_eq!(result.status, checks::Status::Fail);
+    assert!(
+        result.detail.contains("No <form> element found"),
+        "got: {}",
+        result.detail
+    );
+}

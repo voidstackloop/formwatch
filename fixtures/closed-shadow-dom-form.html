@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Closed Shadow DOM Form</title></head>
+<body>
+  <!-- A CLOSED shadow root is genuinely, deliberately impossible to
+       inspect from outside — that's the platform enforcing real
+       encapsulation, not something any tool can or should work around.
+       formwatch should degrade to a clean, honest "no form found" here,
+       not throw partway through a check. -->
+  <div id="host"></div>
+  <script>
+    const host = document.getElementById('host');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = `
+      <form>
+        <label for="fullname">Full name</label>
+        <input id="fullname" name="fullname" type="text" required>
+        <button type="submit">Go</button>
+      </form>
+    `;
+  </script>
+</body>
+</html>
