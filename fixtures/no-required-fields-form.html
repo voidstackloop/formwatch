@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>No Required Fields</title></head>
+<body>
+  <!-- Nothing here is marked required or aria-required — native
+       constraint validation has nothing to exercise, so
+       check_validation_errors should Warn rather than claim a false Pass. -->
+  <form>
+    <label for="comment">Optional comment</label>
+    <input id="comment" name="comment" type="text">
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

@@ -286,6 +286,25 @@ async fn required_document_upload_with_accept_and_a_label_passes() {
 }
 
 #[tokio::test]
+async fn form_with_no_required_fields_warns_instead_of_a_false_pass() {
+    // fixtures/no-required-fields-form.html has nothing marked required or
+    // aria-required — native constraint validation has nothing to
+    // exercise, so check_validation_errors should say so (Warn) rather
+    // than claim a false Pass. The required_count == 0 early return, never
+    // directly asserted before.
+    let (_browser, page, _handle) = open_fixture("no-required-fields-form.html").await;
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("couldn't exercise validation"),
+        "got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn page_text_promising_a_document_upload_with_no_file_field_is_flagged() {
     // fixtures/mentions-documents-no-upload-form.html tells the user to
     // upload a document but never actually provides a file input — the
