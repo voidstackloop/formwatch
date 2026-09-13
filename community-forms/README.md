@@ -2,7 +2,7 @@
 
 Forms listed here get checked automatically on a schedule (see
 `.github/workflows/monitor.yml`), with results published to the
-[dashboard](../site/index.html) — see
+[dashboard](../index.html) — see
 [docs/community-design.md](../docs/community-design.md) for the full
 design and why it's built this way (no server, no database).
 
@@ -33,5 +33,7 @@ design and why it's built this way (no server, no database).
   no-`--submit` traffic against on a recurring schedule. If you're
   unsure, ask in the PR before adding it.
 
-`example/example-form.yml` is a placeholder, not a real form — replace
-or remove it, don't leave it mixed in with genuine entries.
+The registry starts empty — see `example/example-form.yml.template` for
+the format, but don't add it as-is: `example.gov` doesn't resolve, and a
+fake entry would just show up on the dashboard as a permanently broken
+form. Open a PR with your first real one instead.

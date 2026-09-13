@@ -1,5 +1,7 @@
 # formwatch
 
+[![CI](https://github.com/voidstackloop/formwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/voidstackloop/formwatch/actions/workflows/ci.yml)
+
 A CLI that tests public-service forms (permit applications, benefits forms,
 license renewals) for the things that quietly break them: broken submission
 flows, inaccessible markup, unusable mobile layouts, lost input, and unclear
