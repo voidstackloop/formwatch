@@ -87,8 +87,32 @@ fn install_or_discard(tmp: &Path, dest: &Path) {
     }
 }
 
+/// A fresh, unique profile directory for one Chrome instance.
+///
+/// chromiumoxide's own default (when nothing calls `.user_data_dir(...)`)
+/// is a single *fixed* path shared by every launch on the machine
+/// (`$TMPDIR/chromiumoxide-runner`) — harmless for one process at a time,
+/// but two concurrent launches collide on Chrome's own SingletonLock
+/// file for that shared profile and one of them fails outright
+/// ("Failed to create a ProcessSingleton for your profile directory").
+/// This never showed up in local runs (evidently never enough real
+/// concurrent launches at once to hit the race), but reliably did the
+/// first time `cargo test` ran on GitHub Actions' faster, more-parallel
+/// runner — exactly the kind of latent concurrency bug a dev machine
+/// can hide indefinitely.
+fn unique_profile_dir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "formwatch-chrome-profile-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
 async fn build_config(headful: bool) -> Result<BrowserConfig> {
-    let mut builder = BrowserConfig::builder();
+    let mut builder = BrowserConfig::builder().user_data_dir(unique_profile_dir());
     if headful {
         builder = builder.with_head();
     }
@@ -97,7 +121,9 @@ async fn build_config(headful: bool) -> Result<BrowserConfig> {
     }
 
     let exe = fetch_chrome().await?;
-    let mut builder = BrowserConfig::builder().chrome_executable(exe);
+    let mut builder = BrowserConfig::builder()
+        .chrome_executable(exe)
+        .user_data_dir(unique_profile_dir());
     if headful {
         builder = builder.with_head();
     }

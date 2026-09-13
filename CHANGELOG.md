@@ -110,6 +110,14 @@ the bug, not just reasoned about:
   selector-based lookup now pierces open shadow roots. Closed shadow
   roots and cross-origin `<iframe>`s remain genuinely out of reach (real
   platform limits, not gaps), and are documented as such.
+- Every `browser::launch()` shared a single fixed Chrome profile
+  directory by default (a chromiumoxide default, not something formwatch
+  ever set). Harmless launching one at a time, but two concurrent
+  launches collide on Chrome's own SingletonLock for that shared
+  profile and one fails outright — invisible in local runs, but hit
+  reliably the first time `cargo test` ran on GitHub Actions' faster,
+  more-parallel runner. Each launch now gets its own unique profile
+  directory.
 
 ### Changed
 
