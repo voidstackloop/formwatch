@@ -5,7 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>formwatch community dashboard</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  /* Explicit light background + color-scheme: without both, a page with
+     no background set at all inherits the viewer's OS/browser dark
+     theme for its canvas while keeping this stylesheet's dark text
+     color (#1a1a1a) meant for a *light* background — the two together
+     render as near-unreadable dark-on-dark. This dashboard has no dark
+     variant, so pin it to light rather than half-supporting both. */
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; background: #fff; }
   h1 { font-size: 1.4rem; }
   p.sub { color: #666; font-size: 0.9rem; }
   .meta { color: #666; font-size: 0.85rem; margin-bottom: 2rem; }
