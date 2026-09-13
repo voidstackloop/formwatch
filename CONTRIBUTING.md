@@ -24,14 +24,13 @@ need Chrome. `tests/checks_test.rs` and `tests/runner_test.rs` launch a
 real headless Chrome and assert on the results — that's what `cargo test`
 running slower than instant is; it's exercising a browser, not hanging.
 
-If you don't have system Chrome/Chromium installed, run something once to
-warm formwatch's own download cache (`cargo run -- test
-"file://$PWD/fixtures/test-form.html"`) *before* running `cargo test` —
-`cargo test`'s default parallelism means multiple tests can otherwise race
-to populate a cold cache at once and corrupt each other's download (see
-the `ponytail:` note on `fetch_chrome` in `browser.rs`). This doesn't
-affect real `formwatch` runs, which only ever launch the browser once per
-process.
+If you don't have system Chrome/Chromium installed, the first `cargo test`
+downloads Chrome-for-Testing into `~/.cache/formwatch/chrome` — `cargo
+test`'s default parallelism means several tests can hit a cold cache at
+the same time, but `fetch_chrome` in `browser.rs` downloads each into its
+own private temp directory and atomically renames it into place, so
+concurrent cold-cache downloads no longer corrupt each other. No warm-up
+step needed.
 
 When you add or change a check, extend a fixture (or add a new one) with
 a case that would only pass/fail correctly if your change works, and

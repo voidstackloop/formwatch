@@ -76,6 +76,12 @@ the bug, not just reasoned about:
 - No timeout existed anywhere in the check engine; a hung page or
   custom check would block a run (and, with concurrency, a whole
   concurrency slot) forever.
+- Two formwatch processes downloading Chrome-for-Testing at the same
+  time on a machine with a cold cache could corrupt each other's
+  extraction ("corrupt deflate stream"). Each caller now downloads into
+  its own private temp directory and atomically renames it into place;
+  whichever caller loses that race discards its own copy instead of
+  colliding with the winner's.
 
 ### Changed
 
