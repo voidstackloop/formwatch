@@ -18,6 +18,28 @@ See [CHANGELOG.md](CHANGELOG.md) for what's shipped so far, and
 [docs/adr/0001-formwatch-architecture.md](docs/adr/0001-formwatch-architecture.md)
 for why it's built the way it is.
 
+## Legal & authorized use — read this first
+
+formwatch drives an automated browser against live third-party websites
+and, with `--submit`, performs a real HTTP POST. **Only point it at forms
+you own or have explicit written permission to test.** Running it against
+a system you are not authorized to test may be unlawful (e.g. the U.S.
+Computer Fraud and Abuse Act, the U.K. Computer Misuse Act) and will
+almost certainly violate that site's terms of service.
+
+- `--submit` is refused until you acknowledge the notice, via
+  `--accept-terms` or `FORMWATCH_ACCEPT_TERMS=1`.
+- Never use formwatch for denial-of-service, credential attacks,
+  scraping, or to bypass authentication/CAPTCHAs/rate limits.
+- Respect `robots.txt` and terms of service; use `--delay-ms` and
+  `--per-host-delay-ms` against third-party hosts.
+- Screenshots can contain personal data — disable them with
+  `--no-screenshots` where that matters.
+
+Run `formwatch legal` for the built-in notice, and see
+[docs/legal.md](docs/legal.md) for the full text. You are responsible for
+your own use.
+
 ## What it checks
 
 - **Page load** — if the form doesn't load at all (unreachable, DNS
@@ -74,9 +96,10 @@ for why it's built the way it is.
   `./forms.yml`) plus `checks/example.js`, a working example of the
   custom-check mechanism below.
 - `formwatch test <url> [--name NAME] [--submit] [--wait SECS] [--headful]
-  [--checks-dir DIR] [--json]` — run every check once against a single form.
-- `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json]
-  [--delay-ms MS]` — run `test` against every form across one or more
+  [--checks-dir DIR] [--json | --junit | --sarif] [--out FILE]` — run every
+  check once against a single form.
+- `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json | --junit |
+  --sarif] [--out FILE] [--delay-ms MS]` — run `test` against every form across one or more
   YAML configs (a shell glob like `community-forms/**/*.yml` works — the
   shell expands it to multiple arguments). Checks up to 4 forms at once
   (each gets its own browser page — they can't interfere with each
@@ -84,15 +107,59 @@ for why it's built the way it is.
   finishes first. `--delay-ms` (default 0) is a courtesy knob for a
   large `forms.yml` against real third-party sites you don't control —
   it paces how fast new forms start, spreading the load out instead of
-  firing up to 4 requests at once:
+  firing up to 4 requests at once. `--shard INDEX/TOTAL` (e.g. `--shard
+  2/5`) checks only a deterministic slice of the configured forms, so a
+  large registry can be split across several CI jobs or runners with no
+  coordination — the union of all shards is the whole set, and each form
+  lands in exactly one shard on every run:
   ```yaml
   forms:
     - name: Business License Renewal
       url: https://city.gov/business-license
   ```
-- `formwatch report [--html | --json] [--out FILE]` — print (or render to
-  HTML/JSON) the latest run of every form formwatch has recorded, including
-  what changed since each form's previous run.
+- `formwatch report [--html | --json | --junit | --sarif | --prometheus]
+  [--out FILE]` — print (or render to HTML/JSON/JUnit XML/SARIF/Prometheus)
+  the latest run of every form formwatch has recorded, including what
+  changed since each form's previous run. JUnit XML feeds CI test
+  dashboards; SARIF feeds code-scanning UIs like GitHub code scanning;
+  `--prometheus` emits the Prometheus text-exposition format (write it to
+  a textfile-collector path, or serve it). With `--baseline`, accepted
+  findings render as `<skipped>` (JUnit) or `baselineState: "unchanged"`
+  with a `suppressions` entry (SARIF), so an allow-listed finding doesn't
+  redden a pipeline.
+- `formwatch legal` — print the full authorized-use notice and exit.
+- `formwatch doctor [--json] [--probe-llm]` — check the local environment
+  (Chrome availability, writable history/audit directories, config)
+  without running any form; exits non-zero if something a run needs is
+  broken. `--probe-llm` also sends a one-line probe to the configured LLM
+  provider to verify connectivity and credentials.
+- `formwatch notify-test [--webhook-url URL] [--json]` — send one
+  synthetic regression so you can confirm a webhook works before relying
+  on it.
+- `formwatch baseline [--write] [--out FILE] [--json]` — generate a
+  baseline of currently accepted findings from history (`--write`), or
+  print the configured/current one. See
+  [Baselines](#baselines-beyond-the-first-day).
+- `formwatch serve [--addr HOST:PORT]` — serve read-only HTTP endpoints
+  (`/healthz`, `/readyz`, `/metrics`, `/api/forms`) over the accumulated
+  history. See [Service mode](#service-mode).
+- `formwatch completions <shell>` — emit a completion script for bash,
+  zsh, fish, PowerShell, or elvish.
+
+Every command also accepts these global flags:
+
+- `--config PATH` — load settings from a config file (see
+  [Configuration](#configuration); default: `./formwatch.yml`, then the
+  user config directory).
+- `--history-dir DIR`, `--verbose`/`-v`, `--quiet`/`-q`,
+  `--log-format text|json`, `--accept-terms`, `--no-screenshots`,
+  `--proxy URL`, `--insecure`, `--no-sandbox`, `--audit-log FILE`,
+  `--baseline FILE`, `--per-host-delay-ms MS`, `--max-concurrent N`,
+  `--shard INDEX/TOTAL`, `--check-timeout-secs SECS`, and
+  `--fail-on fail|warn` (default `fail`; use `warn` to also fail CI on
+  warnings).
+- `test`/`monitor` additionally accept `--webhook-url URL` to push a
+  regression notification (Slack or generic JSON) after the run.
 
 Every run is stored under `.formwatch/history/` in the current directory so
 `monitor` and `report` can diff against history. Override that location
@@ -143,6 +210,204 @@ returns. `formwatch init` writes a working copy of the example above.
 A script that never resolves (or any built-in check that hangs on an
 unusual page) times out after 20s and reports a Warn rather than
 blocking the rest of the run.
+
+## Configuration
+
+Settings come from four layers, highest precedence first: an explicit CLI
+flag, then an environment variable, then a config file, then the built-in
+default. A config file is looked for at `--config PATH`, then
+`./formwatch.yml` (or `.yaml`), then
+`$XDG_CONFIG_HOME/formwatch/config.yml`. Every field is optional, so a
+partial file is fine:
+
+```yaml
+history_dir: .formwatch/history
+wait: 5
+max_concurrent: 4
+per_host_delay_ms: 1000
+# shard: 2/5                  # check only shard 2 of 5
+screenshots: true
+proxy: http://proxy.internal:8080
+check_timeout_secs: 20
+fail_on: fail               # or: warn — also fail CI on warnings
+audit_log: var/audit.jsonl
+baseline: .formwatch/baseline.json
+# serve_addr: 127.0.0.1:8080  # formwatch serve bind address
+accept_terms: true          # record acknowledgement of the legal notice
+notify:
+  webhook_url: https://hooks.slack.com/services/...
+  on: regression            # or: always
+llm:
+  enabled: true
+  provider: openai          # openai | anthropic | mock
+  model: gpt-4o-mini
+  threshold: 3              # minimum passing score, 1-5
+  fail: false               # true = low scores are FAIL, not WARN
+  redact: true              # scrub obvious PII before sending
+  cache: true               # cache verdicts so unchanged pages aren't re-sent
+  max_retries: 2            # retry transient 429/5xx/network failures
+```
+
+The same settings can be supplied as environment variables, which is handy
+in CI and containers: `FORMWATCH_HISTORY_DIR`, `FORMWATCH_CHECKS_DIR`,
+`FORMWATCH_WAIT`, `FORMWATCH_SUBMIT`, `FORMWATCH_HEADFUL`,
+`FORMWATCH_DELAY_MS`, `FORMWATCH_PER_HOST_DELAY_MS`,
+`FORMWATCH_MAX_CONCURRENT`, `FORMWATCH_CHECK_TIMEOUT_SECS`,
+`FORMWATCH_SHARD`, `FORMWATCH_SCREENSHOTS`, `FORMWATCH_PROXY`,
+`FORMWATCH_INSECURE`,
+`FORMWATCH_NO_SANDBOX`, `FORMWATCH_AUDIT_LOG`, `FORMWATCH_BASELINE`,
+`FORMWATCH_SERVE_ADDR`, `FORMWATCH_ACCEPT_TERMS`,
+`FORMWATCH_FAIL_ON`, `FORMWATCH_WEBHOOK_URL`, `FORMWATCH_WEBHOOK_ON`,
+`FORMWATCH_LLM`, `FORMWATCH_LLM_PROVIDER`, `FORMWATCH_LLM_MODEL`,
+`FORMWATCH_LLM_API_KEY`, `FORMWATCH_LLM_BASE_URL`,
+`FORMWATCH_LLM_TIMEOUT_SECS`, `FORMWATCH_LLM_MAX_RETRIES`,
+`FORMWATCH_LLM_MAX_INPUT_CHARS`, `FORMWATCH_LLM_THRESHOLD`,
+`FORMWATCH_LLM_FAIL`, `FORMWATCH_LLM_REDACT`, `FORMWATCH_LLM_CACHE`,
+`FORMWATCH_LLM_CACHE_DIR`. Provider API keys are also read from the
+conventional `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
+
+## Logging and observability
+
+Diagnostics go to **stderr**, so stdout stays clean for `--json`. The
+default level is `WARN`; `-v` raises it to `INFO`, `-vv` to `DEBUG`, and
+`--quiet` drops it to `ERROR`. Pass `--log-format json` for
+newline-delimited JSON logs:
+
+```
+formwatch --log-format json -v monitor forms.yml
+```
+
+`--audit-log FILE` appends one JSON line per completed run — timestamp,
+URL, and per-check verdicts, deliberately **without** screenshots or other
+captured page content — giving you a PII-free activity trail separate from
+the richer history.
+
+## CI and pipeline integration
+
+`test` and `monitor` exit `1` if any check came back `FAIL`, so they gate
+a CI job directly. For richer integration:
+
+- `--json` emits the full run as JSON (every record carries a
+  `schema_version`).
+- `test`/`monitor` also accept `--junit` / `--sarif` (`--out FILE` to write
+  a file), so a single job can run the checks and emit its results.
+- `report --junit --out results.xml` emits JUnit XML for test dashboards
+  (`FAIL` → `<failure>`, `WARN` → `<skipped>`).
+- `report --sarif --out results.sarif` emits SARIF 2.1.0 for code-scanning
+  UIs (`FAIL` → `error`, `WARN` → `warning`).
+- `report --prometheus --out formwatch.prom` emits Prometheus metrics
+  (form/check gauges and last-run timestamps) for a scrape endpoint or a
+  node_exporter textfile-collector directory.
+- `--webhook-url` posts a regression notification after a run — a Slack
+  incoming webhook gets `{ "text": ... }`, anything else gets a structured
+  JSON payload. By default this fires only on regressions
+  (`WARN`/`PASS` → `FAIL`); set `notify.on: always` to notify every time.
+- `--no-screenshots` (or `screenshots: false`) disables screenshot capture
+  for privacy-sensitive deployments.
+- `--proxy` and `--insecure` route Chrome through a corporate proxy (or a
+  trusted test host with a self-signed certificate).
+
+## LLM semantic checks (optional)
+
+The built-in checks are heuristic — they can prove a validations error
+message *exists*, but not that it is any good. For that, opt in to two
+LLM-backed checks that score wording clarity:
+
+- **Error wording (LLM)** — judges the validation messages on the page
+  (native `validationMessage`s plus conventional error regions).
+- **Instructions (LLM)** — judges labels, hints, and required-document
+  guidance.
+
+```
+OPENAI_API_KEY=sk-... formwatch test https://your-form --llm
+formwatch --llm --llm-provider anthropic monitor forms.yml
+formwatch --llm --llm-base-url http://localhost:11434/v1 --llm-model llama3 test ...  # Ollama
+```
+
+Design guarantees:
+
+- **Off by default.** Nothing is sent anywhere unless you enable it.
+- **Never fatal.** No API key, a provider error, a timeout, or an
+  unparseable reply each degrade to a single `Warn`; they never fail or
+  abort a run. Transient failures (HTTP 429/5xx, network) are retried with
+  backoff, honoring `Retry-After`, and the two checks run concurrently so
+  latency is paid once.
+- **Injection-aware.** Page text is wrapped as untrusted data, the model
+  is explicitly told not to follow instructions inside it, and any copies
+  of the delimiters in the text are neutralized.
+- **Privacy-aware.** Obvious PII (emails, phone numbers, long digit runs)
+  is redacted before sending, input is truncated, and verdicts are cached
+  on disk so unchanged pages aren't re-sent. Use `--llm-no-redact` /
+  `--llm-no-cache` to change that, or point `--llm-base-url` at a
+  self-hosted model.
+- **Subjective by nature**, so a low score is a `Warn` by default; use
+  `--llm-fail` (or `llm.fail: true`) to make it a `Fail`, and
+  `--llm-threshold N` to set the pass bar.
+
+Providers are `openai` (also any OpenAI-compatible endpoint), `anthropic`,
+and `mock` (no network — deterministic, for dry runs and CI of the tool
+itself).
+
+> Sending page text to a third-party provider is a data-processing
+> decision. Make sure you are allowed to do it for the pages you test —
+> see [docs/legal.md](docs/legal.md#9-llm-providers-send-page-text-to-a-third-party).
+
+## Baselines: beyond the first day
+
+A real form usually has a few known findings — tracked elsewhere, or
+accepted for now. Without a baseline, `monitor` fails CI forever and
+people stop reading it. A baseline records the findings you've accepted,
+at their current severity:
+
+- A finding is **suppressed** when a baseline entry for the same form URL
+  and check has a status at least as severe as the current one.
+- A **worse** finding still breaches — a baselined `WARN` never absorbs a
+  `FAIL`.
+- A baseline entry whose finding has **improved or disappeared** is
+  reported as stale, so the file gets cleaned up rather than rotting.
+
+```
+formwatch baseline --write            # snapshot current findings
+formwatch baseline                    # print the configured baseline
+formwatch --baseline .formwatch/baseline.json monitor forms.yml
+```
+
+Baseline-aware behavior applies to `test`/`monitor` exit codes, the
+plain-text `[BASELINED]` annotation, and regression notifications (an
+already-accepted finding won't notify). It is inert unless you pass
+`--baseline` or set `baseline:` / `FORMWATCH_BASELINE`.
+
+## Service mode
+
+`formwatch serve` exposes the accumulated history as a small, **read-only**
+HTTP service — nothing it serves can make formwatch touch a third-party
+site (no endpoint accepts a URL, triggers a run, or submits anything):
+
+```
+formwatch serve --addr 127.0.0.1:8080
+curl localhost:8080/healthz     # 200 ok
+curl localhost:8080/readyz      # 200 ok, or 503 if the history dir isn't writable
+curl localhost:8080/metrics     # Prometheus text format
+curl localhost:8080/api/forms   # latest run of every form as JSON
+```
+
+It binds to `127.0.0.1` by default; set `--addr`, `serve_addr:`, or
+`FORMWATCH_SERVE_ADDR` to change that. Point a Prometheus scrape at
+`/metrics`, an orchestrator's liveness/readiness probes at `/healthz` and
+`/readyz`, or a status page at `/api/forms`. It runs until interrupted
+(Ctrl-C).
+
+## Container
+
+A multi-stage `Dockerfile` builds a small Debian image with Chromium and
+runs as a non-root user. It sets `FORMWATCH_NO_SANDBOX=1`, which is
+usually required in containers where the kernel's Chromium sandbox is
+unavailable:
+
+```
+docker build -t formwatch .
+docker run --rm -v "$PWD:/work" -w /work formwatch monitor forms.yml
+```
 
 ## Requirements
 

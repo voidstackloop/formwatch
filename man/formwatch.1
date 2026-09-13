@@ -1,0 +1,120 @@
+.TH FORMWATCH 1 "formwatch" "formwatch"
+.SH NAME
+formwatch \- test public-service forms for broken flows, accessibility, mobile usability, and lost input
+.SH SYNOPSIS
+.B formwatch
+[\fIGLOBAL OPTIONS\fR] \fICOMMAND\fR [\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B formwatch
+drives a headless Chrome browser against a form, runs a set of checks
+(submission flow, accessibility via axe-core, mobile usability,
+validation errors, required documents, autofill hints, input persistence,
+and bot-protection detection), records the result, and reports what
+changed since the previous run.
+.PP
+.B Only point formwatch at forms you own or are explicitly authorized to
+test.
+Automated access to third-party systems may be unlawful and can violate
+their terms of service. Run
+.B formwatch legal
+for the full notice, or read
+.IR docs/legal.md .
+.SH COMMANDS
+.TP
+.B init \fR[\fIPATH\fR]
+Scaffold a starter forms.yml and an example custom check.
+.TP
+.B test \fIURL\fR [\fIOPTIONS\fR]
+Run every check against a single form. Supports --json, --junit, --sarif,
+and --out.
+.TP
+.B monitor \fIforms.yml\fR...
+Run every form listed in one or more YAML configs. Supports --json,
+--junit, --sarif, --shard, and --out.
+.TP
+.B report \fR[\fB--html\fR|\fB--json\fR|\fB--junit\fR|\fB--sarif\fR|\fB--prometheus\fR] [\fB--out\fR \fIFILE\fR]
+Render the latest run of every known form.
+.TP
+.B legal
+Print the authorized-use notice.
+.TP
+.B doctor \fR[\fB--json\fR] [\fB--probe-llm\fR]
+Check the local environment (Chrome, writable dirs, config) without
+running a form; exits non-zero if something a run needs is broken.
+With --probe-llm, also probe the configured LLM provider's connectivity
+and credentials.
+.TP
+.B notify-test \fR[\fB--webhook-url\fR \fIURL\fR] [\fB--json\fR]
+Send one synthetic regression to verify a webhook is reachable.
+.TP
+.B baseline \fR[\fB--write\fR] [\fB--out\fR \fIFILE\fR] [\fB--json\fR]
+Generate a baseline of accepted findings from history (--write), or print
+the configured/current one.
+.TP
+.B serve \fR[\fB--addr\fR \fIHOST:PORT\fR]
+Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms)
+over the accumulated history. Binds to 127.0.0.1:8080 by default.
+.TP
+.B completions \fISHELL\fR
+Emit a shell completion script (bash, elvish, fish, powershell, zsh).
+.SH GLOBAL OPTIONS
+.TP
+.B --config \fIPATH\fR
+Load settings from a config file.
+.TP
+.B --history-dir \fIDIR\fR
+Where run history is stored (default: .formwatch/history).
+.TP
+.B -v, --verbose
+Increase diagnostic verbosity (repeatable).
+.TP
+.B -q, --quiet
+Only log errors.
+.TP
+.B --log-format \fItext\fR|\fIjson\fR
+Diagnostic log format on stderr.
+.TP
+.B --accept-terms
+Acknowledge the authorized-use notice (required for --submit).
+.TP
+.B --no-screenshots
+Do not capture screenshots on non-Pass checks.
+.TP
+.B --proxy \fIURL\fR / --insecure / --no-sandbox
+Chrome network and sandbox controls.
+.TP
+.B --audit-log \fIFILE\fR
+Append one JSON audit line per run.
+.TP
+.B --baseline \fIFILE\fR
+JSON baseline of accepted findings; only new or worsened findings fail.
+.TP
+.B --per-host-delay-ms \fIMS\fR / --max-concurrent \fIN\fR / --check-timeout-secs \fISECS\fR
+Pacing and timeout controls.
+.TP
+.B --shard \fIINDEX/TOTAL\fR
+Check only a deterministic slice of the configured forms (e.g. 2/5), for
+splitting a large registry across CI jobs.
+.TP
+.B --fail-on \fIfail\fR|\fIwarn\fR
+Which status makes the process exit non-zero (default: fail).
+.TP
+.B --llm
+Enable the optional LLM semantic checks of error and instruction wording.
+Page text (redacted, truncated) is sent to the configured provider.
+.TP
+.B --llm-provider \fIopenai\fR|\fIanthropic\fR|\fImock\fR, --llm-model \fIMODEL\fR, --llm-base-url \fIURL\fR
+Provider selection and endpoint (use --llm-base-url for OpenAI-compatible
+or self-hosted models).
+.TP
+.B --llm-api-key \fIKEY\fR
+API key (prefer the provider's environment variable, e.g. OPENAI_API_KEY).
+.TP
+.B --llm-threshold \fIN\fR, --llm-fail, --llm-max-retries \fIN\fR, --llm-no-redact, --llm-no-cache
+Pass bar (1-5, default 3), whether a low score fails, transient-failure
+retries, and privacy/cache controls.
+.SH EXIT STATUS
+0 if no check returned FAIL; 1 if any check did (or a config failed to
+parse); 2 if --submit was refused for lack of acknowledgement.
+.SH SEE ALSO
+Full notice: docs/legal.md. Project: https://github.com/voidstackloop/formwatch

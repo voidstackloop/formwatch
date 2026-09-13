@@ -10,9 +10,16 @@ cargo fmt
 ```
 
 CI runs `fmt --check`, `clippy -D warnings`, and `test` on Linux, a
-build-only check on macOS/Windows, and `cargo audit` against advertised
-security advisories. Run the four commands above (plus `cargo audit` if
-you touched `Cargo.toml`) before opening a PR so CI doesn't surprise you.
+build-only check on macOS/Windows, an MSRV check against the
+`rust-version` in `Cargo.toml`, `cargo audit` against advertised security
+advisories, and `cargo deny` against the policy in `deny.toml`. Run the
+four commands above (plus `cargo audit` and `cargo deny check` if you
+touched `Cargo.toml`) before opening a PR so CI doesn't surprise you.
+
+Anything user-visible should carry tests, and new library modules
+(`src/legal.rs`, `src/config.rs`, `src/notify.rs`, `src/export.rs`, ...)
+keep their pure logic in functions that are unit-testable without a
+browser.
 
 When adding a dependency, set `default-features = false` unless you
 specifically want its defaults — chromiumoxide's defaults used to pull in

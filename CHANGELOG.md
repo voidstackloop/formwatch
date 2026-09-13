@@ -6,7 +6,112 @@ project doesn't have a release yet, so everything below is grouped under
 
 ## [Unreleased]
 
+### Security
+
+- An authorized-use notice now ships with the tool and is surfaced
+  everywhere it matters: `formwatch legal` prints it, `docs/legal.md`
+  carries the long form, `NOTICE` and the README cover it, and the HTML
+  report and community dashboard carry a footer. `test`/`monitor` print a
+  one-line reminder when the notice hasn't been acknowledged, and
+  `--submit` (a real POST to a live system) now **refuses to run** until
+  acknowledged via `--accept-terms`, `accept_terms: true` in config, or
+  `FORMWATCH_ACCEPT_TERMS=1`.
+- New privacy and network controls: `--no-screenshots` (omit captured
+  page content, which can contain personal data), `--proxy` and
+  `--insecure` for corporate proxies/internal test hosts, `--no-sandbox`
+  for containers, and per-host request pacing (`--per-host-delay-ms`)
+  plus an append-only, screenshot-free JSON audit log (`--audit-log`).
+
 ### Added
+
+- **Optional LLM semantic checks** (`--llm` / `llm:` config): two
+  provider-agnostic checks — "Error wording (LLM)" and
+  "Instructions (LLM)" — that score the clarity of validation error
+  messages and instructions/required-document guidance, addressing the
+  heuristic wording limitation called out in the README. Providers are
+  OpenAI (and any OpenAI-compatible endpoint via `--llm-base-url`),
+  Anthropic, and a no-network `mock`. The feature is off by default,
+  never fatal (missing key / provider error / timeout / unparseable reply
+  degrade to a single `Warn`), redacts obvious PII, truncates input, and
+  caches verdicts on disk. A low score is a `Warn` unless `--llm-fail` is
+  set; `--llm-threshold` sets the pass bar.
+- LLM resilience and safety hardening: transient provider failures (HTTP
+  429/5xx, network) are retried with exponential backoff honoring
+  `Retry-After`; the two semantic checks run concurrently; page text is
+  wrapped as untrusted data with delimiter neutralization and an explicit
+  instruction not to follow embedded directions (prompt-injection
+  resistance); provider token usage is logged at debug level; and
+  `formwatch doctor --probe-llm` verifies provider connectivity and
+  credentials.
+- **Baseline / allow-list of accepted findings** (`--baseline FILE`,
+  `baseline:` config, `FORMWATCH_BASELINE`, and `formwatch baseline
+  [--write]`): a finding is suppressed only when a baseline entry for the
+  same URL and check is at least as severe as the current status, so a
+  baselined `WARN` never absorbs a `FAIL`. Baseline-aware behavior covers
+  `test`/`monitor` exit codes, a plain-text `[BASELINED]` annotation, and
+  regression notifications; stale entries (improved or disappeared) are
+  reported. This lets CI fail on *new* problems instead of failing on day
+  one and being ignored.
+- Deterministic **sharding** (`monitor --shard INDEX/TOTAL`, `shard:`
+  config, `FORMWATCH_SHARD`): checks only a stable slice of the configured
+  forms, so a large registry can be split across several CI jobs or
+  runners with no coordination — the union of all shards is the whole set
+  and each form lands in exactly one shard every run.
+- **Baseline-aware JUnit and SARIF**: with `--baseline`, accepted findings
+  render as `<skipped>` in JUnit (so an allow-listed `FAIL` doesn't fail
+  CI) and as `baselineState: "unchanged"` with a SARIF `suppressions`
+  entry, so code-scanning UIs treat them as pre-existing rather than new.
+- `test` and `monitor` accept `--junit` / `--sarif` (with `--out`), so a
+  single CI job can run the checks and emit results in one step.
+- `report --prometheus` renders Prometheus text-exposition metrics
+  (`formwatch_forms_total`, `formwatch_checks_failing`,
+  `formwatch_checks_warning`, `formwatch_check_last_run_timestamp_seconds`,
+  and per-check `formwatch_check_status`) for a scrape endpoint or a
+  node_exporter textfile-collector directory.
+- A read-only **service mode** (`formwatch serve --addr HOST:PORT`, config
+  `serve_addr`, or `FORMWATCH_SERVE_ADDR`): serves `/healthz`, `/readyz`,
+  `/metrics` (Prometheus), and `/api/forms` (JSON) over the accumulated
+  history, binding to `127.0.0.1:8080` by default and running until
+  Ctrl-C. Deliberately read-only — no endpoint accepts a URL, triggers a
+  run, or submits anything, so exposing it can't make formwatch touch a
+  third-party site.
+- Structured diagnostics via `tracing`, written to **stderr** so
+  machine-readable stdout is never corrupted: `-v`/`-vv`/`--quiet` and
+  `--log-format json`.
+- Configuration file and environment-variable support
+  (`src/config.rs`): a `formwatch.yml` (or `--config PATH`, or the user
+  config dir) plus `FORMWATCH_*` variables, with CLI > env > file >
+  default precedence.
+- New machine-readable report formats: `report --junit` (JUnit XML for
+  CI dashboards; `FAIL` becomes `<failure>`, `WARN` becomes `<skipped>`)
+  and `report --sarif` (SARIF 2.1.0 for code-scanning UIs).
+- Regression webhooks: `--webhook-url` on `test`/`monitor` posts to a
+  Slack incoming webhook or a generic JSON endpoint when a check
+  regresses to `FAIL` (`notify.on: always` to notify every run).
+- `formwatch completions <shell>` emits shell completions; a man page
+  lives in `man/formwatch.1`.
+- Every persisted/JSON run now carries a `schema_version`
+  (`history::SCHEMA_VERSION`), so downstream consumers can detect a
+  breaking shape change instead of silently misreading newer data.
+- A typed `formwatch::error::Error` (`thiserror`) alongside the existing
+  `anyhow` code, so embedders can match on failure cause; new modules are
+  written against it and `anyhow::Error` interops via one variant.
+- Container and supply-chain packaging: a multi-stage `Dockerfile`,
+  `deny.toml` (cargo-deny policy), a Homebrew formula template, a
+  Dependabot config, and release checksums, a CycloneDX SBOM, and build
+  provenance attestation in the release workflow.
+- CI now also runs an MSRV check, `cargo deny`, coverage
+  (`cargo-llvm-cov`), and CodeQL.
+- `formwatch doctor [--json]`: checks the local environment (Chrome
+  availability, writable history/audit directories, config, legal
+  acknowledgement) without running a form, and exits non-zero if
+  something a run depends on is broken.
+- `formwatch notify-test [--webhook-url URL]`: sends one synthetic
+  regression so a webhook can be verified before relying on it.
+- `--fail-on fail|warn` (also `fail_on` in config and
+  `FORMWATCH_FAIL_ON`): choose whether only `FAIL`, or also `WARN`,
+  makes the process exit non-zero. Default is unchanged (`fail`).
+- A `SECURITY.md` vulnerability-disclosure policy.
 
 - `formwatch init`, `formwatch test`, `formwatch monitor`, `formwatch report`
   (plain-text, `--html`, `--json`) — the whole CLI.
@@ -54,6 +159,17 @@ project doesn't have a release yet, so everything below is grouped under
   found," a real finding with the wrong explanation.
 
 ### Fixed
+
+- A truly **cold** Chrome cache failed to populate: the concurrent-safe
+  download created the cache's parent directory but never the private
+  temp directory the fetcher writes its archive into, so the very first
+  run on a machine with no system Chrome — or an empty cache — died with
+  a bare `Failed to create archive file: No such file or directory`.
+  Found while exercising the release test suite in a fresh environment;
+  the temp directory is now created before the download.
+- All emitted errors/diagnostics now go through the logging pipeline, so
+  `--log-format json` produces valid newline-delimited JSON on stderr
+  instead of being interleaved with plain-text `eprintln!` warnings.
 
 Found via code review and two independent review agents during
 development; every fix below was verified with a fixture reproducing

@@ -1,4 +1,4 @@
-use crate::{browser, checks, history};
+use crate::{browser, checks, history, options};
 use anyhow::Result;
 use chromiumoxide::Browser;
 use std::path::Path;
@@ -10,6 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// public-service form is itself the most severe possible finding;
 /// losing the whole report because the browser couldn't even navigate
 /// there would hide exactly the outage this tool exists to catch.
+///
+/// Uses default [`options::RunOptions`] and [`browser::OpenOptions`];
+/// callers needing custom timeouts, screenshot suppression, or retry
+/// policy should use [`run_one_with`].
 pub async fn run_one(
     browser: &Browser,
     history_dir: &Path,
@@ -19,11 +23,37 @@ pub async fn run_one(
     wait: u64,
     checks_dir: Option<&Path>,
 ) -> Result<history::RunResult> {
-    let checks = match browser::open(browser, &url).await {
+    run_one_with(
+        browser,
+        history_dir,
+        name,
+        url,
+        &options::RunOptions {
+            allow_submit: submit,
+            wait_secs: wait,
+            ..options::RunOptions::default()
+        },
+        &browser::OpenOptions::default(),
+        checks_dir,
+    )
+    .await
+}
+
+/// [`run_one`], honoring caller-supplied run and browser-open options.
+pub async fn run_one_with(
+    browser: &Browser,
+    history_dir: &Path,
+    name: String,
+    url: String,
+    opts: &options::RunOptions,
+    open_opts: &browser::OpenOptions,
+    checks_dir: Option<&Path>,
+) -> Result<history::RunResult> {
+    let checks = match browser::open_with(browser, &url, open_opts).await {
         Ok(page) => {
-            let mut checks = checks::run_all(&page, submit, wait).await;
+            let mut checks = checks::run_all_with(&page, opts).await;
             if let Some(dir) = checks_dir {
-                match checks::run_custom_checks(&page, dir).await {
+                match checks::run_custom_checks_with(&page, dir, opts).await {
                     Ok(custom) => checks.extend(custom),
                     Err(e) => checks.push(checks::CheckResult {
                         name: "Custom checks".to_string(),
@@ -32,6 +62,9 @@ pub async fn run_one(
                         screenshot: None,
                     }),
                 }
+            }
+            if let Some(llm) = &opts.llm {
+                checks.extend(crate::llm::run_semantic_checks(&page, llm, opts.screenshots).await);
             }
             let _ = page.close().await;
             checks
@@ -46,11 +79,13 @@ pub async fn run_one(
 
     let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     let run = history::RunResult {
+        schema_version: history::SCHEMA_VERSION,
         name,
         url,
         timestamp: ts,
         checks,
     };
     history::save_run(history_dir, &run)?;
+    tracing::info!(form = %run.name, url = %run.url, "run recorded");
     Ok(run)
 }

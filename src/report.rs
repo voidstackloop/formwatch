@@ -46,6 +46,11 @@ pub struct ReportTemplate {
     pub forms: Vec<FormReport>,
     /// When this report was generated, formatted for display.
     pub generated_at: String,
+    /// The formwatch version that generated this report.
+    pub version: String,
+    /// The run schema version ([`history::SCHEMA_VERSION`]) the report's
+    /// data uses.
+    pub schema_version: u32,
 }
 
 fn human_time(ts: i64) -> String {
@@ -79,6 +84,8 @@ pub fn build(history_dir: &Path) -> Result<ReportTemplate> {
     Ok(ReportTemplate {
         forms,
         generated_at: human_time(chrono::Utc::now().timestamp()),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: history::SCHEMA_VERSION,
     })
 }
 
@@ -111,12 +118,14 @@ mod tests {
             screenshot: None,
         };
         let older = RunResult {
+            schema_version: history::SCHEMA_VERSION,
             name: "x".into(),
             url: "https://city.gov/apply".into(),
             timestamp: 1,
             checks: vec![check(Status::Pass)],
         };
         let newer = RunResult {
+            schema_version: history::SCHEMA_VERSION,
             name: "x".into(),
             url: "https://city.gov/apply".into(),
             timestamp: 2,
@@ -172,6 +181,7 @@ mod tests {
             history::save_run(
                 &dir,
                 &RunResult {
+                    schema_version: history::SCHEMA_VERSION,
                     name: "x".into(),
                     url: "https://city.gov/apply".into(),
                     timestamp: ts,

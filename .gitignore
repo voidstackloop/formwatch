@@ -1,3 +1,6 @@
 /target
 /.formwatch
 *.log
+lcov.info
+*.cdx.json
+/dist

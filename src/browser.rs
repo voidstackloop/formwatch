@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chromiumoxide::browser::BrowserConfigBuilder;
 use chromiumoxide::{Browser, BrowserConfig, BrowserFetcher, BrowserFetcherOptions, Page};
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
@@ -19,8 +20,7 @@ use tokio::task::JoinHandle;
 /// own copy and defer to the winner. No lock file needed — the
 /// atomicity of a same-filesystem rename provides the race-safety.
 async fn fetch_chrome() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    let cache_dir = PathBuf::from(home).join(".cache/formwatch/chrome");
+    let cache_dir = chrome_cache_dir().context("HOME is not set")?;
 
     if !already_downloaded(&cache_dir) {
         eprintln!(
@@ -41,6 +41,25 @@ fn already_downloaded(cache_dir: &Path) -> bool {
     cache_dir
         .read_dir()
         .map(|mut d| d.next().is_some())
+        .unwrap_or(false)
+}
+
+/// The directory formwatch downloads Chrome-for-Testing into
+/// (`$HOME/.cache/formwatch/chrome`), if `HOME` is set. Exposed so
+/// `formwatch doctor` can report whether a cached build exists without
+/// launching or downloading anything.
+pub fn chrome_cache_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .map(|home| PathBuf::from(home).join(".cache/formwatch/chrome"))
+}
+
+/// Whether formwatch already has a Chrome build cached from a previous
+/// run (see [`chrome_cache_dir`]).
+pub fn has_cached_chrome() -> bool {
+    chrome_cache_dir()
+        .map(|dir| already_downloaded(&dir))
         .unwrap_or(false)
 }
 
@@ -71,6 +90,12 @@ async fn download_into(cache_dir: &Path) -> Result<()> {
         .unwrap_or(0);
     let tmp = parent.join(format!(".chrome-download-{}-{nanos}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp); // stale leftover from a crashed prior run, if any
+
+    // The fetcher writes its archive to `<tmp>/<rev>.zip` and only creates
+    // the revision subdirectory during unzip — so `<tmp>` itself must
+    // exist before the download starts, or a truly cold cache fails with
+    // a bare "Failed to create archive file: No such file or directory".
+    std::fs::create_dir_all(&tmp).context("creating chrome download temp dir")?;
 
     fetch_at(&tmp).await?;
     install_or_discard(&tmp, cache_dir);
@@ -111,30 +136,99 @@ fn unique_profile_dir() -> PathBuf {
     ))
 }
 
-async fn build_config(headful: bool) -> Result<BrowserConfig> {
-    let mut builder = BrowserConfig::builder().user_data_dir(unique_profile_dir());
-    if headful {
-        builder = builder.with_head();
+/// Options that shape how Chrome is launched. Defaults reproduce
+/// formwatch's historical behavior exactly (headless, no proxy, no TLS
+/// relaxation).
+#[derive(Debug, Clone, Default)]
+pub struct BrowserOptions {
+    /// Show the browser window instead of running headless.
+    pub headful: bool,
+    /// HTTP(S) proxy URL. Passed to Chrome via `--proxy-server`.
+    pub proxy: Option<String>,
+    /// Ignore TLS certificate errors. Only for a trusted internal proxy
+    /// or a known test host — never for general web use.
+    pub insecure: bool,
+    /// Launch Chrome with `--no-sandbox`. Required in many container
+    /// environments where the kernel sandbox is unavailable; never use it
+    /// on a host browsing untrusted pages as a normal user.
+    pub no_sandbox: bool,
+    /// Optional CDP request timeout.
+    pub request_timeout: Option<Duration>,
+}
+
+/// How many times [`open`] attempts to load a page before giving up, and
+/// the backoff between attempts. Defaults are the historical behavior:
+/// 3 attempts, 500ms then 1s.
+#[derive(Debug, Clone)]
+pub struct OpenOptions {
+    /// Number of attempts before reporting the page unreachable.
+    pub attempts: u32,
+    /// Base backoff; doubles on each retry.
+    pub backoff: Duration,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            backoff: Duration::from_millis(500),
+        }
     }
-    if let Ok(config) = builder.build() {
+}
+
+/// Applies the launch flags shared by both the system-Chrome and
+/// downloaded-Chrome paths.
+fn apply_launch_flags(
+    mut builder: BrowserConfigBuilder,
+    opts: &BrowserOptions,
+) -> BrowserConfigBuilder {
+    if let Some(proxy) = &opts.proxy {
+        builder = builder.arg(format!("--proxy-server={proxy}"));
+    }
+    if opts.insecure {
+        builder = builder.arg("--ignore-certificate-errors");
+    }
+    if opts.no_sandbox {
+        builder = builder.no_sandbox();
+    }
+    if let Some(timeout) = opts.request_timeout {
+        builder = builder.request_timeout(timeout);
+    }
+    builder
+}
+
+async fn build_config(opts: &BrowserOptions) -> Result<BrowserConfig> {
+    let base = BrowserConfig::builder().user_data_dir(unique_profile_dir());
+    let base = apply_launch_flags(base, opts);
+    let base = if opts.headful { base.with_head() } else { base };
+    if let Ok(config) = base.build() {
         return Ok(config);
     }
 
     let exe = fetch_chrome().await?;
-    let mut builder = BrowserConfig::builder()
+    let base = BrowserConfig::builder()
         .chrome_executable(exe)
         .user_data_dir(unique_profile_dir());
-    if headful {
-        builder = builder.with_head();
-    }
-    builder.build().map_err(|e| anyhow::anyhow!(e))
+    let base = apply_launch_flags(base, opts);
+    let base = if opts.headful { base.with_head() } else { base };
+    base.build().map_err(|e| anyhow::anyhow!(e))
 }
 
 /// Launches a headless (or headful, for debugging) Chrome and hands back the
 /// browser plus the background task that pumps its CDP event loop — that
 /// task must stay alive for the whole session or every later call hangs.
 pub async fn launch(headful: bool) -> Result<(Browser, JoinHandle<()>)> {
-    let config = build_config(headful).await?;
+    launch_with(&BrowserOptions {
+        headful,
+        ..BrowserOptions::default()
+    })
+    .await
+}
+
+/// [`launch`], honoring a full [`BrowserOptions`] (proxy, TLS, timeout).
+pub async fn launch_with(opts: &BrowserOptions) -> Result<(Browser, JoinHandle<()>)> {
+    let config = build_config(opts).await?;
+    tracing::debug!(headful = opts.headful, proxy = ?opts.proxy, "launching Chrome");
     let (browser, mut handler) = Browser::launch(config)
         .await
         .context("failed to launch Chrome")?;
@@ -142,33 +236,30 @@ pub async fn launch(headful: bool) -> Result<(Browser, JoinHandle<()>)> {
     Ok((browser, handle))
 }
 
-/// How many times [`open`] attempts to load a page before giving up. A
-/// real government site under real-world conditions can have a
-/// transient DNS blip or a dropped connection that has nothing to do
-/// with the form itself being broken — retrying a couple of times
-/// before reporting "Page load: Fail" avoids mistaking network noise
-/// for a real finding, without masking a form that's genuinely down
-/// (every attempt still has to fail for that to be reported).
-const OPEN_ATTEMPTS: u32 = 3;
-
-/// Backoff between attempts; doubles each retry (500ms, then 1s).
-const OPEN_RETRY_BACKOFF: Duration = Duration::from_millis(500);
-
-/// Opens `url` in a new page and waits for it to load, retrying up to
-/// [`OPEN_ATTEMPTS`] times with backoff on failure. Returns `Err` only
-/// if every attempt failed to load at all — including the case where
-/// Chrome "successfully" navigates to its own error interstitial (a DNS
-/// failure, connection refused, or blocked port), which callers should
-/// treat as the page genuinely being unreachable, not a real result.
+/// Opens `url` in a new page and waits for it to load, retrying (with
+/// default [`OpenOptions`]) on failure. Returns `Err` only if every
+/// attempt failed to load at all — including the case where Chrome
+/// "successfully" navigates to its own error interstitial (a DNS failure,
+/// connection refused, or blocked port), which callers should treat as
+/// the page genuinely being unreachable, not a real result.
 pub async fn open(browser: &Browser, url: &str) -> Result<Page> {
+    open_with(browser, url, &OpenOptions::default()).await
+}
+
+/// [`open`], honoring custom retry count and backoff.
+pub async fn open_with(browser: &Browser, url: &str, opts: &OpenOptions) -> Result<Page> {
+    let attempts = opts.attempts.max(1);
     let mut last_err = None;
-    for attempt in 0..OPEN_ATTEMPTS {
+    for attempt in 0..attempts {
         match open_once(browser, url).await {
             Ok(page) => return Ok(page),
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                tracing::warn!(url, attempt = attempt + 1, error = %e, "page load attempt failed");
+                last_err = Some(e);
+            }
         }
-        if attempt + 1 < OPEN_ATTEMPTS {
-            tokio::time::sleep(OPEN_RETRY_BACKOFF * 2u32.pow(attempt)).await;
+        if attempt + 1 < attempts {
+            tokio::time::sleep(opts.backoff * 2u32.pow(attempt)).await;
         }
     }
     Err(last_err.expect("loop runs at least once, always setting last_err on failure"))

@@ -2,6 +2,7 @@
 name = "formwatch"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Tests public-service forms for broken flows, accessibility, mobile usability, and lost input."
 license = "MIT"
 repository = "https://github.com/voidstackloop/formwatch"
@@ -9,15 +10,35 @@ keywords = ["accessibility", "testing", "cli", "civic-tech", "monitoring"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime", "_fetcher-rusttls-tokio"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
 anyhow = "1"
+thiserror = "2"
 askama = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 owo-colors = "4"
 base64 = "0.23.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "ansi"] }
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+regex = "1"
+
+# Faster release binaries for a tool that ships prebuilt; no effect on
+# correctness. `panic = "abort"` is deliberately NOT set: formwatch
+# isolates panics inside async tasks and the release build should keep
+# unwinding so one bad check can't take the whole process down.
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

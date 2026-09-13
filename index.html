@@ -26,6 +26,7 @@
   .badge.warn { background: #b26a00; }
   .badge.fail { background: #c62828; }
   #status { color: #666; font-size: 0.9rem; }
+  footer.legal { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #666; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -60,7 +61,6 @@ async function main() {
     forms.sort((a, b) => severity(b) - severity(a));
 
     status.textContent = `${forms.length} form(s), last checked ${new Date(Math.max(...forms.map(f => f.timestamp * 1000))).toLocaleString()}.`;
-
     for (const form of forms) {
         const card = document.createElement('div');
         card.className = 'form-card';
@@ -82,5 +82,12 @@ function escapeHtml(s) {
 
 main();
 </script>
+<footer class="legal">
+  <p>formwatch checks public-service forms with an automated browser. Forms
+  are only tested with no <code>--submit</code> and at a courtesy pace, and
+  are curated by pull request — but note that automated access must be
+  authorized. See the project repository's legal notice before pointing
+  formwatch at any site.</p>
+</footer>
 </body>
 </html>

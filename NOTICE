@@ -1,0 +1,40 @@
+formwatch
+Copyright (c) the formwatch contributors
+
+This product is licensed under the MIT License (see LICENSE).
+
+AUTHORIZED-USE NOTICE
+
+formwatch drives an automated browser against third-party websites and,
+with the --submit flag, sends a real HTTP POST containing dummy data to a
+live system. Using it against any system you do not own or have explicit
+permission to test may be unlawful and will almost certainly violate that
+site's terms of service.
+
+Unauthorized automated access can violate computer-misuse and
+unauthorized-access laws (for example the U.S. Computer Fraud and Abuse
+Act, 18 U.S.C. 1030, and the U.K. Computer Misuse Act 1990), as well as
+civil and contractual obligations, in many jurisdictions. Do not use
+formwatch for denial-of-service, credential attacks, scraping, or to
+bypass authentication, CAPTCHAs, or rate limits.
+
+You are solely responsible for ensuring you have authorization to test
+any form you point formwatch at, and for complying with applicable law
+including data-protection law. The authors provide this software as-is,
+without warranty, and do not authorize any unlawful use.
+
+OPTIONAL LLM FEATURE
+
+The optional LLM semantic checks (--llm) extract text from the page under
+test and send it to a third-party provider you configure. Redaction of
+personal data is best-effort. Do not enable this on pages containing
+sensitive data unless you have assessed and accepted that data transfer.
+See docs/legal.md section 9.
+
+Full notice: docs/legal.md. Print it with: `formwatch legal`.
+
+THIRD-PARTY COMPONENTS
+
+This product bundles axe-core (assets/axe.min.js), Copyright (c) Deque
+Systems, licensed under the Mozilla Public License 2.0. See the header of
+that file for details.

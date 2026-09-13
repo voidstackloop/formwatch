@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Version of the persisted/`--json` run schema.
+///
+/// Every [`RunResult`] written from this build carries this value in its
+/// `schema_version` field. It exists so downstream consumers (the
+/// community dashboard, CI pipelines, external integrations) can detect a
+/// breaking shape change instead of silently misreading newer data.
+/// Bumping it is a breaking change. Records written before the field
+/// existed deserialize as version 1 via [`default_schema_version`].
+pub const SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    SCHEMA_VERSION
+}
+
 /// One complete run of every check against one form — what
 /// [`save_run`]/[`load_runs`] persist and load, and the JSON shape of
 /// `--json` output. This is also the community dashboard's data
@@ -11,6 +25,10 @@ use std::path::{Path, PathBuf};
 /// change for anything reading history off disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
+    /// Version of this record's schema (see [`SCHEMA_VERSION`]). Defaults
+    /// to 1 for history files written before the field existed.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     /// The form's label — from `--name`, a `forms.yml` entry's `name`,
     /// or the URL itself if neither was given.
     pub name: String,
@@ -229,6 +247,7 @@ mod tests {
 
     fn run(checks: Vec<CheckResult>) -> RunResult {
         RunResult {
+            schema_version: SCHEMA_VERSION,
             name: "x".into(),
             url: "https://example.test/form".into(),
             timestamp: 0,
@@ -415,10 +434,21 @@ mod tests {
 
     fn run_at(url: &str, timestamp: i64) -> RunResult {
         RunResult {
+            schema_version: SCHEMA_VERSION,
             name: "x".into(),
             url: url.into(),
             timestamp,
             checks: vec![],
         }
+    }
+
+    #[test]
+    fn missing_schema_version_defaults_to_one() {
+        // History written before the field existed must still load.
+        let parsed: RunResult = serde_json::from_str(
+            r#"{"name":"x","url":"https://city.gov/a","timestamp":1,"checks":[]}"#,
+        )
+        .expect("parse legacy record");
+        assert_eq!(parsed.schema_version, SCHEMA_VERSION);
     }
 }

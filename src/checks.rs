@@ -1,3 +1,4 @@
+use crate::options::RunOptions;
 use anyhow::{Context, Result};
 use chromiumoxide::Page;
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
@@ -982,19 +983,12 @@ pub async fn check_bot_protection(page: &Page) -> Result<CheckResult> {
     ))
 }
 
-/// Default ceiling for a single check — generous for a slow real-world
-/// page, but bounded. `check_submission_flow` gets its own longer
-/// ceiling (an 8-step wizard can legitimately take a while) and
-/// `check_input_persistence` gets one that scales with its own
-/// user-requested `--wait`, rather than sharing this default.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
-
 /// Captures a full-page PNG screenshot as a ready-to-embed
 /// `data:image/png;base64,...` URI. Best-effort: a screenshot is
 /// supporting evidence, not the check result itself, so a capture
 /// failure (e.g. a page that navigated away mid-check) returns `None`
 /// rather than turning a real check result into an error.
-async fn capture_screenshot(page: &Page) -> Option<String> {
+pub(crate) async fn capture_screenshot(page: &Page) -> Option<String> {
     use base64::Engine;
     let png = page
         .screenshot(
@@ -1052,11 +1046,19 @@ async fn run_safely(
     page: &Page,
     name: &str,
     timeout: Duration,
+    capture: bool,
     fut: impl std::future::Future<Output = Result<CheckResult>>,
 ) -> CheckResult {
     let mut check = run_with_timeout(name, timeout, fut).await;
     if check.status != Status::Pass {
-        check.screenshot = capture_screenshot(page).await;
+        if capture {
+            check.screenshot = capture_screenshot(page).await;
+        }
+        tracing::debug!(
+            check = check.name.as_str(),
+            status = check.status.label(),
+            "check finished"
+        );
     }
     check
 }
@@ -1066,16 +1068,35 @@ async fn run_safely(
 /// or a real `--submit` navigates away from the form partway through.
 /// `wait_secs` is passed through to [`check_input_persistence`];
 /// `allow_submit` gates whether [`check_submission_flow`] clicks the
-/// real submit button.
+/// real submit button. Uses default [`RunOptions`]; callers that need
+/// screenshot suppression or custom timeouts should use
+/// [`run_all_with`].
 pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<CheckResult> {
+    run_all_with(
+        page,
+        &RunOptions {
+            allow_submit,
+            wait_secs,
+            ..RunOptions::default()
+        },
+    )
+    .await
+}
+
+/// [`run_all`], honoring a caller-supplied [`RunOptions`] (screenshot
+/// capture, custom base timeout, submit/wait).
+pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
+    let allow_submit = opts.allow_submit;
+    let wait_secs = opts.wait_secs;
+    let check_timeout = opts.check_timeout;
+    let capture = opts.screenshots;
     // An 8-step wizard, each step waiting up to STEP_TRANSITION_MAX_WAIT,
-    // can legitimately take longer than the default CHECK_TIMEOUT.
-    const WIZARD_TIMEOUT: Duration = Duration::from_secs(60);
-    // The user explicitly controls how long this one waits (README
-    // advertises passing a large --wait to test a real session
-    // timeout) — its own ceiling has to scale with that, not share the
-    // fixed default, or a legitimate long --wait would get cut off.
-    let input_persistence_timeout = Duration::from_secs(wait_secs.saturating_add(30));
+    // can legitimately take longer than the base check timeout.
+    let wizard_timeout = opts.wizard_timeout();
+    // The user explicitly controls how long the persistence check waits
+    // (the README advertises passing a large --wait to test a real
+    // session timeout), so its ceiling scales with that.
+    let input_persistence_timeout = opts.persistence_timeout();
     // check_submission_flow runs first deliberately: the later checks
     // (especially validation errors, which breaks one already-valid
     // field to see if just that one gets caught) want a filled form, not
@@ -1099,7 +1120,8 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
     let submission = run_safely(
         page,
         "Submission flow",
-        WIZARD_TIMEOUT,
+        wizard_timeout,
+        capture,
         check_submission_flow(page, allow_submit),
     )
     .await;
@@ -1114,7 +1136,8 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
         run_safely(
             page,
             "Bot protection",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_bot_protection(page),
         )
         .await,
@@ -1122,35 +1145,40 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
         run_safely(
             page,
             "Accessibility",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_accessibility(page),
         )
         .await,
         run_safely(
             page,
             "Mobile usability",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_mobile_usability(page),
         )
         .await,
         run_safely(
             page,
             "Validation errors",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_validation_errors(page),
         )
         .await,
         run_safely(
             page,
             "Required documents",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_required_documents(page),
         )
         .await,
         run_safely(
             page,
             "Autofill hints",
-            CHECK_TIMEOUT,
+            check_timeout,
+            capture,
             check_autofill_hints(page),
         )
         .await,
@@ -1158,6 +1186,7 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
             page,
             "Input persistence",
             input_persistence_timeout,
+            capture,
             check_input_persistence(page, wait_secs),
         )
         .await,
@@ -1170,8 +1199,21 @@ pub async fn run_all(page: &Page, allow_submit: bool, wait_secs: u64) -> Vec<Che
 /// and a verdict, and JS-in-the-page already does that. Each script must
 /// evaluate (directly, or via a Promise) to `{ status, detail }` with
 /// status one of "Pass"/"Warn"/"Fail"; the check's name comes from the
-/// filename so scripts can't spoof a built-in check's name.
+/// filename so scripts can't spoof a built-in check's name. Uses default
+/// [`RunOptions`].
 pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResult>> {
+    run_custom_checks_with(page, dir, &RunOptions::default()).await
+}
+
+/// [`run_custom_checks`], honoring a caller-supplied [`RunOptions`]
+/// (screenshot capture and base timeout).
+pub async fn run_custom_checks_with(
+    page: &Page,
+    dir: &Path,
+    opts: &RunOptions,
+) -> Result<Vec<CheckResult>> {
+    let check_timeout = opts.check_timeout;
+    let capture = opts.screenshots;
     let mut paths: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("reading --checks-dir {}", dir.display()))?
         .filter_map(|e| e.ok())
@@ -1191,7 +1233,7 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
             .with_context(|| format!("reading {}", path.display()))?;
 
         let outcome: std::result::Result<Result<serde_json::Value>, tokio::time::error::Elapsed> =
-            tokio::time::timeout(CHECK_TIMEOUT, async {
+            tokio::time::timeout(check_timeout, async {
                 let value = page
                     .evaluate(src)
                     .await?
@@ -1218,10 +1260,10 @@ pub async fn run_custom_checks(page: &Page, dir: &Path) -> Result<Vec<CheckResul
             Err(_) => result(
                 &name,
                 Status::Warn,
-                format!("custom check timed out after {}s", CHECK_TIMEOUT.as_secs()),
+                format!("custom check timed out after {}s", check_timeout.as_secs()),
             ),
         };
-        if check.status != Status::Pass {
+        if check.status != Status::Pass && capture {
             check.screenshot = capture_screenshot(page).await;
         }
         results.push(check);

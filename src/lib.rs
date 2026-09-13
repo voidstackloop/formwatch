@@ -21,15 +21,46 @@
 //!    plain-text and `--html` output) from that history.
 #![warn(missing_docs)]
 
+/// Append-only audit logging (one JSON line per run, no captured page
+/// content).
+pub mod audit;
+/// Baseline / allow-list of accepted findings.
+pub mod baseline;
 /// Launches headless Chrome and opens pages.
 pub mod browser;
 /// The check engine: every built-in check, plus running `--checks-dir`
 /// custom checks.
 pub mod checks;
+/// Configuration file and environment-variable support.
+pub mod config;
+/// Environment self-check (`formwatch doctor`).
+pub mod doctor;
+/// The library's structured error type.
+pub mod error;
+/// Machine-readable export formats (JUnit XML, SARIF).
+pub mod export;
 /// Persists and reloads run history on disk, and diffs consecutive runs.
 pub mod history;
+/// Authorized-use and legal notices.
+pub mod legal;
+/// Per-host request pacing.
+pub mod limiter;
+/// Optional LLM-powered semantic checks of error and instruction wording.
+pub mod llm;
+/// Structured logging setup.
+pub mod logging;
+/// Prometheus metrics rendering for the latest runs.
+pub mod metrics;
+/// Regression notifications (Slack / generic webhooks).
+pub mod notify;
+/// Options that shape how a single run behaves.
+pub mod options;
 /// Builds the cross-form report model used by both plain-text and
 /// `--html` output.
 pub mod report;
 /// Ties browser + checks + history together for a single form.
 pub mod runner;
+/// Read-only HTTP service (`formwatch serve`).
+pub mod serve;
+/// Deterministic work partitioning (`--shard`) for large registries.
+pub mod shard;

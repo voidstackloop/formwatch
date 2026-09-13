@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.formwatch/
+results/
+community-forms/
+docs/
+fixtures/
+tests/
+index.html
+*.md
+!README.md

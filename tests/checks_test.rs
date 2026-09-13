@@ -701,3 +701,37 @@ async fn ordinary_form_with_no_challenge_passes_bot_protection() {
         .expect("check_bot_protection");
     assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
 }
+
+#[tokio::test]
+async fn llm_semantic_checks_run_against_a_page_with_the_mock_provider() {
+    // The LLM checks are optional and network-backed in production; the
+    // `mock` provider makes the whole pipeline (extraction -> redaction ->
+    // prompt -> parse -> verdict -> status) exercisable offline. Both
+    // checks must appear, and because the mock verdict scores 4 (>= the
+    // default threshold of 3), both pass — and crucially the detail says
+    // "score 4", proving extraction actually found text to judge rather
+    // than short-circuiting on the "nothing to review" path.
+    let (_browser, page, _handle) = open_fixture("llm-semantic-form.html").await;
+    let options = formwatch::llm::LlmOptions {
+        enabled: true,
+        provider: formwatch::llm::provider::Provider::Mock,
+        cache: false,
+        ..formwatch::llm::LlmOptions::default()
+    };
+    let results = formwatch::llm::run_semantic_checks(&page, &options, false).await;
+
+    assert_eq!(results.len(), 2, "expected two LLM checks: {results:#?}");
+    for check in &results {
+        assert!(check.name.contains("LLM"), "got name {:?}", check.name);
+        assert_eq!(
+            check.status,
+            checks::Status::Pass,
+            "mock score 4 should pass: {check:?}"
+        );
+        assert!(
+            check.detail.contains("score 4"),
+            "check should have judged real extracted text, got: {}",
+            check.detail
+        );
+    }
+}

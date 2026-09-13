@@ -27,11 +27,12 @@
   .changes ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
   .screenshot { max-width: 100%; max-height: 20rem; margin-top: 0.5rem; border: 1px solid #ddd; border-radius: 4px; display: block; }
   .flaky-badge { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #eee; color: #555; }
+  footer.legal { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #666; font-size: 0.8rem; }
 </style>
 </head>
 <body>
 <h1>formwatch report</h1>
-<div class="meta">Generated {{ generated_at }}</div>
+<div class="meta">Generated {{ generated_at }} &middot; formwatch {{ version }} &middot; schema v{{ schema_version }}</div>
 
 {% for form in forms %}
 <div class="form-card">
@@ -69,6 +70,13 @@
 {% else %}
 <p>No runs recorded yet. Run <code>formwatch test &lt;url&gt;</code> or <code>formwatch monitor forms.yml</code> first.</p>
 {% endfor %}
+
+<footer class="legal">
+  <p>formwatch drives an automated browser against third-party sites. Only
+  test forms you own or are explicitly authorized to test. See the
+  <code>legal</code> docs in the formwatch repository for the full
+  authorized-use notice. Screenshots may contain personal data.</p>
+</footer>
 
 </body>
 </html>
