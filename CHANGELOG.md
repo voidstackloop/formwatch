@@ -188,6 +188,11 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Fixed
 
+- The declared MSRV was wrong: the code (edition-2024 let-chains) and
+  several transitive dependencies (`home`, `icu_*` need 1.88;
+  `idna_adapter` needs 1.86) require Rust **1.88**, not 1.85, so the MSRV
+  CI job failed. `rust-version`, the CI MSRV toolchain, and the Docker
+  builder are now 1.88.
 - Mobile usability never reported horizontal overflow: the check compared
   `document.documentElement.scrollWidth` against `window.innerWidth`, but
   under mobile emulation `innerWidth` already reflects the overflowed

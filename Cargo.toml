@@ -2,7 +2,7 @@
 name = "formwatch"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Tests public-service forms for broken flows, accessibility, mobile usability, and lost input."
 license = "MIT"
 repository = "https://github.com/voidstackloop/formwatch"

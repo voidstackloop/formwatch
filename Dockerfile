@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage -------------------------------------------------------
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 WORKDIR /src
 
 # Compile dependencies against a placeholder so a source-only change
