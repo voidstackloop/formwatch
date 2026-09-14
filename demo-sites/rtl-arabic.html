@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>طلب إقامة</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>طلب إقامة</h1>
+  <p class="lede">A right-to-left wizard whose controls are labeled in
+  Arabic (التالي = Next, إرسال = Submit). formwatch recognizes the wording,
+  so Submission flow should walk both steps.</p>
+
+  <form id="wizard">
+    <fieldset id="s1">
+      <legend>الخطوة 1 من 2</legend>
+      <label for="s1name">الاسم الكامل</label>
+      <input id="s1name" name="s1name" type="text" autocomplete="name">
+      <p><button type="button" onclick="go()">التالي</button></p>
+    </fieldset>
+    <fieldset id="s2" hidden>
+      <legend>الخطوة 2 من 2</legend>
+      <label for="s2ref">رقم المرجع</label>
+      <input id="s2ref" name="s2ref" type="text">
+      <p><button type="submit">إرسال</button></p>
+    </fieldset>
+  </form>
+
+  <script>
+    function go() {
+      document.getElementById('s1').hidden = true;
+      document.getElementById('s2').hidden = false;
+    }
+  </script>
+</main>
+</body>
+</html>

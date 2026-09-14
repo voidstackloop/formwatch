@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unlabeled contact form</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Contact the permits office</h1>
+  <p class="lede">None of these fields have a label, and the required ones
+  have no accessible error description — expect Accessibility and
+  Validation errors to Fail.</p>
+
+  <form id="contact">
+    <input name="fullname" type="text" required>
+    <input name="email" type="email" required>
+    <textarea name="message" required></textarea>
+    <button type="submit">Send</button>
+  </form>
+</main>
+</body>
+</html>

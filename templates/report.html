@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>formwatch report</title>
 <style>
   /* Explicit light background + color-scheme: without both, a page with
@@ -13,7 +14,15 @@
   :root { color-scheme: light; }
   body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; background: #fff; }
   h1 { font-size: 1.4rem; }
-  .meta { color: #666; font-size: 0.85rem; margin-bottom: 2rem; }
+  .meta { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1.25rem; padding: 0.6rem 0.75rem; background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 8px; position: sticky; top: 0; z-index: 5; }
+  .toolbar input[type=search] { flex: 1 1 12rem; padding: 0.35rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
+  .toolbar label { font-size: 0.85rem; color: #444; }
+  .toolbar select { padding: 0.3rem 0.4rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.85rem; }
+  .filters { display: inline-flex; gap: 0.25rem; }
+  .filters button { padding: 0.3rem 0.6rem; border: 1px solid #ccc; background: #fff; border-radius: 999px; font-size: 0.8rem; cursor: pointer; }
+  .filters button.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  #count { margin-left: auto; font-size: 0.8rem; color: #666; }
   .form-card { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.5rem; overflow: hidden; }
   .form-card h2 { margin: 0; padding: 0.75rem 1rem; background: #f5f5f5; font-size: 1.05rem; }
   .form-card h2 small { color: #666; font-weight: normal; display: block; font-size: 0.8rem; }
@@ -27,6 +36,12 @@
   .changes ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
   .screenshot { max-width: 100%; max-height: 20rem; margin-top: 0.5rem; border: 1px solid #ddd; border-radius: 4px; display: block; }
   .flaky-badge { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #eee; color: #555; }
+  .streak-badge { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #fde7e7; color: #a11; }
+  .trend { display: inline-flex; gap: 2px; margin-left: 0.5rem; vertical-align: middle; }
+  .trend span { width: 8px; height: 14px; border-radius: 2px; display: inline-block; }
+  .trend .pass { background: #2e7d32; }
+  .trend .warn { background: #b26a00; }
+  .trend .fail { background: #c62828; }
   footer.legal { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; color: #666; font-size: 0.8rem; }
 </style>
 </head>
@@ -34,9 +49,31 @@
 <h1>formwatch report</h1>
 <div class="meta">Generated {{ generated_at }} &middot; formwatch {{ version }} &middot; schema v{{ schema_version }}</div>
 
+{% if !forms.is_empty() %}
+<div class="toolbar">
+  <input id="q" type="search" placeholder="Filter by name or URL…" aria-label="Filter forms by name or URL">
+  <div class="filters" role="group" aria-label="Filter by status">
+    <button data-filter="all" class="active">All</button>
+    <button data-filter="fail">Failing</button>
+    <button data-filter="warn">Warnings</button>
+    <button data-filter="flaky">Flaky</button>
+    <button data-filter="pass">Passing</button>
+  </div>
+  <label>Sort
+    <select id="sort" aria-label="Sort forms">
+      <option value="recent">Most recent</option>
+      <option value="severity">Worst first</option>
+      <option value="name">Name</option>
+    </select>
+  </label>
+  <span id="count"></span>
+</div>
+{% endif %}
+
+<div id="forms">
 {% for form in forms %}
-<div class="form-card">
-  <h2>{{ form.run.name }}<small>{{ form.run.url }} &middot; last checked {{ form.when }}</small></h2>
+<div class="form-card" data-name="{{ form.run.name }}" data-url="{{ form.run.url }}" data-ts="{{ form.run.timestamp }}" data-worst="{{ form.worst() }}" data-flaky="{% if form.has_flaky() %}1{% else %}0{% endif %}">
+  <h2>{{ form.run.name }}<small>{{ form.run.url }} &middot; last checked {{ form.when }}</small>{% if !form.trend.is_empty() %}<span class="trend" title="Recent runs, oldest to newest">{% for s in form.trend %}<span class="{{ s.css_class() }}" title="{{ s.label() }}"></span>{% endfor %}</span>{% endif %}</h2>
   <table>
     <tbody>
     {% for check in form.run.checks %}
@@ -46,6 +83,9 @@
           <strong>{{ check.name }}</strong>
           {% if let Some(f) = form.flakiness_of(check) %}
           <span class="flaky-badge" title="Changed status {{ f.transitions }} times across recorded history">&#9888; Flaky</span>
+          {% endif %}
+          {% if let Some(s) = form.streak_of(check) %}
+          <span class="streak-badge" title="{{ s.status.label() }} for the last {{ s.count }} runs">&#8635; {{ s.count }}&times;</span>
           {% endif %}
           <br>{{ check.detail }}
           {% if let Some(shot) = check.screenshot %}
@@ -70,6 +110,7 @@
 {% else %}
 <p>No runs recorded yet. Run <code>formwatch test &lt;url&gt;</code> or <code>formwatch monitor forms.yml</code> first.</p>
 {% endfor %}
+</div>
 
 <footer class="legal">
   <p>formwatch drives an automated browser against third-party sites. Only
@@ -78,5 +119,66 @@
   authorized-use notice. Screenshots may contain personal data.</p>
 </footer>
 
+<script>
+(function () {
+  var formsEl = document.getElementById('forms');
+  if (!formsEl) return;
+  var cards = Array.prototype.slice.call(formsEl.querySelectorAll('.form-card'));
+  var q = document.getElementById('q');
+  var count = document.getElementById('count');
+  var sort = document.getElementById('sort');
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('.filters button'));
+  var filter = 'all';
+
+  function matchesFilter(card) {
+    var worst = card.dataset.worst;
+    if (filter === 'fail') return worst === '2';
+    if (filter === 'warn') return worst === '1';
+    if (filter === 'pass') return worst === '0';
+    if (filter === 'flaky') return card.dataset.flaky === '1';
+    return true;
+  }
+
+  function matchesQuery(card) {
+    var term = (q && q.value ? q.value : '').trim().toLowerCase();
+    if (!term) return true;
+    return (card.dataset.name + ' ' + card.dataset.url).toLowerCase().indexOf(term) !== -1;
+  }
+
+  function applySort() {
+    if (!sort) return;
+    var mode = sort.value;
+    var sorted = cards.slice().sort(function (a, b) {
+      if (mode === 'severity') return Number(b.dataset.worst) - Number(a.dataset.worst);
+      if (mode === 'name') return a.dataset.name.localeCompare(b.dataset.name);
+      return Number(b.dataset.ts) - Number(a.dataset.ts);
+    });
+    for (var i = 0; i < sorted.length; i++) formsEl.appendChild(sorted[i]);
+  }
+
+  function apply() {
+    var visible = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var show = matchesFilter(cards[i]) && matchesQuery(cards[i]);
+      cards[i].hidden = !show;
+      if (show) visible++;
+    }
+    if (count) count.textContent = visible + ' / ' + cards.length + ' shown';
+  }
+
+  if (q) q.addEventListener('input', apply);
+  if (sort) sort.addEventListener('change', function () { applySort(); apply(); });
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      filter = b.dataset.filter;
+      buttons.forEach(function (other) { other.classList.toggle('active', other === b); });
+      apply();
+    });
+  });
+
+  applySort();
+  apply();
+})();
+</script>
 </body>
 </html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benefits application</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Apply for utility assistance</h1>
+  <p class="lede">A reCAPTCHA widget sits above the submit button. formwatch
+  never tries to solve it, but it also doesn't mistake it for a broken form —
+  Bot protection should Warn (not Fail) and the rest of the checks still run.</p>
+
+  <form id="benefits">
+    <label for="applicant">Applicant name</label>
+    <input id="applicant" name="applicant" type="text" autocomplete="name" required aria-describedby="applicant-help">
+    <small class="hint" id="applicant-help">The person applying for assistance.</small>
+
+    <div class="g-recaptcha" data-sitekey="demo-site-key"></div>
+    <p><button type="submit">Submit application</button></p>
+  </form>
+</main>
+</body>
+</html>

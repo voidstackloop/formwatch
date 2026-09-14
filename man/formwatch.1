@@ -55,6 +55,13 @@ the configured/current one.
 Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms)
 over the accumulated history. Binds to 127.0.0.1:8080 by default.
 .TP
+.B prune \fR(\fB--keep-last\fR \fIN\fR | \fB--keep-days\fR \fID\fR) [\fB--dry-run\fR]
+Delete old history runs, keeping the most recent ones.
+.TP
+.B demo \fR[\fB--addr\fR \fIHOST:PORT\fR]
+Serve a bundled demo site of deliberately varied forms on 127.0.0.1:8099
+for trying formwatch without touching a third-party site.
+.TP
 .B completions \fISHELL\fR
 Emit a shell completion script (bash, elvish, fish, powershell, zsh).
 .SH GLOBAL OPTIONS

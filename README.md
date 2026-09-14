@@ -126,7 +126,12 @@ your own use.
   a textfile-collector path, or serve it). With `--baseline`, accepted
   findings render as `<skipped>` (JUnit) or `baselineState: "unchanged"`
   with a `suppressions` entry (SARIF), so an allow-listed finding doesn't
-  redden a pipeline.
+  redden a pipeline. The plain-text report also shows, for any check that
+  has held a non-Pass status for two or more consecutive runs, a `↳ FAIL
+  for the last N run(s), since <date>` line; the HTML report adds a streak
+  badge, a compact coloured trend strip of recent runs, and a client-side
+  toolbar to search by name/URL, filter by status (failing / warnings /
+  flaky / passing), and sort by recency, severity, or name.
 - `formwatch legal` — print the full authorized-use notice and exit.
 - `formwatch doctor [--json] [--probe-llm]` — check the local environment
   (Chrome availability, writable history/audit directories, config)
@@ -143,6 +148,13 @@ your own use.
 - `formwatch serve [--addr HOST:PORT]` — serve read-only HTTP endpoints
   (`/healthz`, `/readyz`, `/metrics`, `/api/forms`) over the accumulated
   history. See [Service mode](#service-mode).
+- `formwatch prune (--keep-last N | --keep-days D) [--dry-run]` — delete
+  old history runs so a long-lived deployment doesn't grow forever. See
+  [Retention](#retention).
+- `formwatch demo [--addr HOST:PORT]` — serve a bundled demo site of
+  deliberately varied forms (one clean, the rest each tripping a check) so
+  you can see what formwatch catches. See
+  [Demo site & benchmarks](#demo-site--benchmarks).
 - `formwatch completions <shell>` — emit a completion script for bash,
   zsh, fish, PowerShell, or elvish.
 
@@ -233,6 +245,7 @@ fail_on: fail               # or: warn — also fail CI on warnings
 audit_log: var/audit.jsonl
 baseline: .formwatch/baseline.json
 # serve_addr: 127.0.0.1:8080  # formwatch serve bind address
+# keep_last: 50               # formwatch prune: runs to keep per form
 accept_terms: true          # record acknowledgement of the legal notice
 notify:
   webhook_url: https://hooks.slack.com/services/...
@@ -257,6 +270,7 @@ in CI and containers: `FORMWATCH_HISTORY_DIR`, `FORMWATCH_CHECKS_DIR`,
 `FORMWATCH_INSECURE`,
 `FORMWATCH_NO_SANDBOX`, `FORMWATCH_AUDIT_LOG`, `FORMWATCH_BASELINE`,
 `FORMWATCH_SERVE_ADDR`, `FORMWATCH_ACCEPT_TERMS`,
+`FORMWATCH_KEEP_LAST`, `FORMWATCH_KEEP_DAYS`,
 `FORMWATCH_FAIL_ON`, `FORMWATCH_WEBHOOK_URL`, `FORMWATCH_WEBHOOK_ON`,
 `FORMWATCH_LLM`, `FORMWATCH_LLM_PROVIDER`, `FORMWATCH_LLM_MODEL`,
 `FORMWATCH_LLM_API_KEY`, `FORMWATCH_LLM_BASE_URL`,
@@ -397,6 +411,23 @@ It binds to `127.0.0.1` by default; set `--addr`, `serve_addr:`, or
 `/readyz`, or a status page at `/api/forms`. It runs until interrupted
 (Ctrl-C).
 
+## Retention
+
+History is append-only, so a deployment that runs nightly accumulates runs
+forever. `formwatch prune` trims it, per form:
+
+```
+formwatch prune --keep-last 50          # keep the 50 most recent runs of each form
+formwatch prune --keep-days 90          # keep only runs from the last 90 days
+formwatch prune --keep-last 50 --dry-run   # report what would go, delete nothing
+```
+
+`--keep-last` and `--keep-days` are mutually exclusive; both keep the
+newest runs. Defaults can live in config (`keep_last:` / `keep_days:`) or
+`FORMWATCH_KEEP_LAST` / `FORMWATCH_KEEP_DAYS`. `prune` only ever touches
+`*.json` run files and leaves anything else in the history directory
+alone. Run it from the same cron/Action that runs `monitor`.
+
 ## Container
 
 A multi-stage `Dockerfile` builds a small Debian image with Chromium and
@@ -408,6 +439,29 @@ unavailable:
 docker build -t formwatch .
 docker run --rm -v "$PWD:/work" -w /work formwatch monitor forms.yml
 ```
+
+## Demo site & benchmarks
+
+Want to see it work before pointing it at anything real? `formwatch demo`
+serves 35 bundled forms — a clean baseline, plus a page for **every** check
+and known edge case (missing labels, low contrast, lost input vs. explained
+session loss, wizards and their slow/keyup/icon-only variants, shadow DOM,
+a closed shadow root, RTL, three bot-protection widgets, vague wording, …):
+
+```
+formwatch demo                        # serves http://127.0.0.1:8099
+formwatch monitor demo-sites/forms.yml
+formwatch report --html --out report.html
+```
+
+The pages are compiled into the binary (`demo-sites/`), so `cargo install`
+gets them too — nothing to copy, and nothing third-party is contacted. See
+[demo-sites/README.md](demo-sites/README.md) for the page-by-page list.
+
+For performance, `scripts/benchmark.sh` runs `monitor` over the demo site
+repeatedly and reports timings; the current reference numbers and how to
+reproduce them are in [BENCHMARKS.md](BENCHMARKS.md) (35 forms / 280 checks
+per run, **median 13.0s** with `--wait 1` and the default concurrency).
 
 ## Requirements
 

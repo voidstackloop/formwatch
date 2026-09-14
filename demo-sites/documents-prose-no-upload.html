@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documents mentioned, no upload field</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Documents mentioned, no upload field</h1>
+  <p class="lede">The page tells you to upload documents but provides no
+  file input at all — Required documents should Warn about the mismatch.</p>
+  <p>You must upload a copy of your most recent utility bill and attach a
+  scan of your signed lease before we can process your application.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" required aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

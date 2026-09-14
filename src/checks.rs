@@ -540,7 +540,13 @@ pub async fn check_mobile_usability(page: &Page) -> Result<CheckResult> {
     // every check that runs after this one in run_all's fixed order.
     let measured: Result<(bool, i64)> = async {
         let overflow: bool = page
-            .evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
+            // Compare against the layout viewport (clientWidth), not
+            // window.innerWidth: under mobile emulation innerWidth already
+            // reflects the overflowed content width, so `scrollWidth >
+            // innerWidth` is never true even on wildly overflowing pages.
+            .evaluate(
+                "document.documentElement.scrollWidth > document.documentElement.clientWidth + 1",
+            )
             .await?
             .into_value()?;
 
@@ -722,7 +728,7 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
             r#"(() => {{
                 const f = {TARGET_FORM_JS};
                 if (!f) return 0;
-                const invalid = ({DEEP_QUERY_JS})(f, ':invalid, [aria-invalid=true]');
+                const invalid = ({DEEP_QUERY_JS})(f, 'input:invalid, select:invalid, textarea:invalid, [aria-invalid=true]');
                 let unlabeled = 0;
                 for (const el of invalid) {{
                     const describedBy = el.getAttribute('aria-describedby');

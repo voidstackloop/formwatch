@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No submit control</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>No submit control</h1>
+  <p class="lede">The form has fields but no Next, Continue, or Submit
+  control at all — Submission flow should Fail and say so, rather than
+  hanging or reporting a misleading Pass.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name">
+  </form>
+</main>
+</body>
+</html>

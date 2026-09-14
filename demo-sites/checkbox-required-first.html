@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Required checkbox</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Required agreement checkbox</h1>
+  <p class="lede">The first required field is a checkbox whose error has no
+  accessible description — Validation errors should Fail. (A naive check
+  that only set <code>.value = ''</code> would never notice, because that's
+  a no-op on a checkbox.)</p>
+
+  <form id="f">
+    <label for="agree">I agree to the terms of service</label>
+    <input id="agree" name="agree" type="checkbox" required>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

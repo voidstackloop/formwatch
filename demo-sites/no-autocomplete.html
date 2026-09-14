@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account details</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Account details</h1>
+  <p class="lede">Name, email, phone, and postal fields that look
+  autofillable but carry no <code>autocomplete</code> attribute — Autofill
+  hints should Warn.</p>
+
+  <form id="account">
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text">
+
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email">
+
+    <label for="phone">Phone number</label>
+    <input id="phone" name="phone" type="tel">
+
+    <label for="zip">Postal code</label>
+    <input id="zip" name="zip" type="text">
+
+    <p><button type="submit">Save</button></p>
+  </form>
+</main>
+</body>
+</html>

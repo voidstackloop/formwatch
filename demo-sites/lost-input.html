@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Application progress</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Save your application progress</h1>
+  <p class="lede">This field quietly wipes itself a moment after you type,
+  with nothing on the page explaining why — Input persistence should Fail.</p>
+
+  <form id="lost">
+    <label for="ref">Reference number</label>
+    <input id="ref" name="ref" type="text" autocomplete="off" aria-describedby="ref-help">
+    <small class="hint" id="ref-help">We&rsquo;ll save your progress as you go.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+
+  <script>
+    var ref = document.getElementById('ref');
+    ref.addEventListener('input', function () {
+      setTimeout(function () { ref.value = ''; }, 900);
+    });
+  </script>
+</main>
+</body>
+</html>

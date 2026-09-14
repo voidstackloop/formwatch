@@ -232,6 +232,123 @@ pub fn flakiness(runs: &[RunResult]) -> Vec<Flakiness> {
         .collect()
 }
 
+/// How long a check has held its current status across the most recent
+/// consecutive runs — a chronic failure (`count` large, `since` old) calls
+/// for a different response than a fresh one. Distinct from [`flakiness`]:
+/// that counts back-and-forth transitions across all history, this counts
+/// the unbroken tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckStreak {
+    /// Which check.
+    pub name: String,
+    /// The status it has held.
+    pub status: Status,
+    /// How many consecutive most-recent runs have shown this status.
+    pub count: usize,
+    /// Timestamp of the oldest run in the streak.
+    pub since: i64,
+}
+
+/// Computes every current check's unbroken run of its present status,
+/// ending at the latest run. A check missing from a run ends the streak
+/// there.
+pub fn streaks(runs: &[RunResult]) -> Vec<CheckStreak> {
+    let Some(latest) = runs.last() else {
+        return vec![];
+    };
+    latest
+        .checks
+        .iter()
+        .map(|c| {
+            let mut count = 0usize;
+            let mut since = latest.timestamp;
+            for run in runs.iter().rev() {
+                match run.checks.iter().find(|x| x.name == c.name) {
+                    Some(x) if x.status == c.status => {
+                        count += 1;
+                        since = run.timestamp;
+                    }
+                    _ => break,
+                }
+            }
+            CheckStreak {
+                name: c.name.clone(),
+                status: c.status,
+                count,
+                since,
+            }
+        })
+        .collect()
+}
+
+/// A retention policy for pruning history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retain {
+    /// Keep the `n` most recent runs of each form.
+    Last(usize),
+    /// Keep runs newer than `d` days.
+    Days(u64),
+}
+
+/// What [`prune`] did (or, for a dry run, would do).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Number of form directories examined.
+    pub forms: usize,
+    /// Number of run files removed (or that would be).
+    pub removed: usize,
+    /// Number of run files kept, across all forms.
+    pub kept: usize,
+}
+
+/// Deletes history runs per `retain`, per form. `now` is passed in so the
+/// `Days` policy is testable; `dry_run` computes the outcome without
+/// touching disk. Other files in a form directory are left alone.
+pub fn prune(base: &Path, retain: Retain, dry_run: bool, now: i64) -> Result<PruneReport> {
+    let mut report = PruneReport::default();
+    if !base.exists() {
+        return Ok(report);
+    }
+    for entry in fs::read_dir(base)? {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        report.forms += 1;
+
+        let mut runs: Vec<(i64, PathBuf)> = Vec::new();
+        for file in fs::read_dir(&dir)? {
+            let path = file?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let run: RunResult = serde_json::from_str(&fs::read_to_string(&path)?)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            runs.push((run.timestamp, path));
+        }
+        // Oldest first; filename breaks ties so same-second runs (with a
+        // `-N` suffix) stay a stable, total order.
+        runs.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+
+        let to_remove = match retain {
+            Retain::Last(n) => runs.len().saturating_sub(n),
+            Retain::Days(days) => {
+                let cutoff = now - (days as i64) * 86_400;
+                runs.iter().take_while(|(ts, _)| *ts < cutoff).count()
+            }
+        };
+
+        for (_, path) in runs.iter().take(to_remove) {
+            if !dry_run {
+                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+            }
+            report.removed += 1;
+        }
+        report.kept += runs.len() - to_remove;
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,5 +567,102 @@ mod tests {
         )
         .expect("parse legacy record");
         assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn streaks_count_the_unbroken_tail_of_a_status() {
+        let runs = vec![
+            run_status(1, Status::Pass),
+            run_status(2, Status::Fail),
+            run_status(3, Status::Fail),
+            run_status(4, Status::Fail),
+        ];
+        let streaks = streaks(&runs);
+        assert_eq!(streaks.len(), 1);
+        assert_eq!(streaks[0].status, Status::Fail);
+        assert_eq!(streaks[0].count, 3);
+        assert_eq!(streaks[0].since, 2, "since is the oldest run in the run");
+    }
+
+    #[test]
+    fn streak_ends_when_a_check_disappears() {
+        let with_check = |status| RunResult {
+            schema_version: SCHEMA_VERSION,
+            name: "x".into(),
+            url: "https://city.gov/a".into(),
+            timestamp: 1,
+            checks: vec![check("Accessibility", status)],
+        };
+        let without = RunResult {
+            schema_version: SCHEMA_VERSION,
+            name: "x".into(),
+            url: "https://city.gov/a".into(),
+            timestamp: 2,
+            checks: vec![],
+        };
+        // Latest run lacks the check, so it isn't reported at all.
+        assert!(streaks(&[with_check(Status::Fail), without]).is_empty());
+    }
+
+    #[test]
+    fn prune_keep_last_removes_the_oldest_runs() {
+        let dir = std::env::temp_dir().join("formwatch-test-prune-last");
+        let _ = fs::remove_dir_all(&dir);
+        for ts in 1..=4 {
+            save_run(&dir, &run_at("https://city.gov/a", ts)).expect("save");
+        }
+        let report = prune(&dir, Retain::Last(2), false, 0).expect("prune");
+        assert_eq!(report.removed, 2);
+        assert_eq!(report.kept, 2);
+        let remaining = load_runs(&dir, "https://city.gov/a").expect("load");
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].timestamp, 3, "the two newest survive");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_dry_run_changes_nothing() {
+        let dir = std::env::temp_dir().join("formwatch-test-prune-dry");
+        let _ = fs::remove_dir_all(&dir);
+        for ts in 1..=3 {
+            save_run(&dir, &run_at("https://city.gov/a", ts)).expect("save");
+        }
+        let report = prune(&dir, Retain::Last(1), true, 0).expect("prune");
+        assert_eq!(report.removed, 2, "reports what it would remove");
+        assert_eq!(
+            load_runs(&dir, "https://city.gov/a").expect("load").len(),
+            3,
+            "but deletes nothing"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_by_days_uses_the_cutoff() {
+        let dir = std::env::temp_dir().join("formwatch-test-prune-days");
+        let _ = fs::remove_dir_all(&dir);
+        let now = 1_000_000;
+        let day = 86_400;
+        save_run(&dir, &run_at("https://city.gov/a", now - 10 * day)).expect("save");
+        save_run(&dir, &run_at("https://city.gov/a", now - 2 * day)).expect("save");
+        save_run(&dir, &run_at("https://city.gov/a", now - day)).expect("save");
+        // Keep 3 days: the 10-day-old run goes, the two within the window stay.
+        let report = prune(&dir, Retain::Days(3), false, now).expect("prune");
+        assert_eq!(report.removed, 1);
+        assert_eq!(
+            load_runs(&dir, "https://city.gov/a").expect("load").len(),
+            2
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn run_status(timestamp: i64, status: Status) -> RunResult {
+        RunResult {
+            schema_version: SCHEMA_VERSION,
+            name: "x".into(),
+            url: "https://city.gov/a".into(),
+            timestamp,
+            checks: vec![check("Accessibility", status)],
+        }
     }
 }

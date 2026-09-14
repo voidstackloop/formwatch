@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apply for a residential parking permit</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Apply for a residential parking permit</h1>
+  <p class="lede">This form is built to pass every built-in check: labeled
+  fields, autofill hints, accessible error descriptions, 44px controls, and
+  no lost input.</p>
+
+  <form id="permit">
+    <label for="fullname">Full name</label>
+    <input id="fullname" name="fullname" type="text" autocomplete="name" required aria-describedby="fullname-help">
+    <small class="hint" id="fullname-help">As it appears on your ID.</small>
+
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" autocomplete="email" required aria-describedby="email-help">
+    <small class="hint" id="email-help">We&rsquo;ll email your permit here.</small>
+
+    <label for="address">Street address</label>
+    <input id="address" name="address" type="text" autocomplete="street-address" required aria-describedby="address-help">
+    <small class="hint" id="address-help">Include apartment number if any.</small>
+
+    <label for="vehicle">Vehicle registration number</label>
+    <input id="vehicle" name="vehicle" type="text" required aria-describedby="vehicle-help">
+    <small class="hint" id="vehicle-help">Exactly as printed on your plates.</small>
+
+    <p><button type="submit">Submit application</button></p>
+  </form>
+</main>
+</body>
+</html>

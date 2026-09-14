@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generic bot check</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Generic bot check</h1>
+  <p class="lede">No known widget, just "are you a robot?" wording. Bot
+  protection should Warn via its generic-text fallback while the form
+  itself is still found and checked.</p>
+
+  <p>Please prove you&rsquo;re not a robot to continue.</p>
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" required aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

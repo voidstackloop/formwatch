@@ -10,8 +10,8 @@ use formwatch::logging::{self, LogFormat};
 use formwatch::options::RunOptions;
 use formwatch::shard::Shard;
 use formwatch::{
-    audit, browser, browser::BrowserOptions, browser::OpenOptions, checks, doctor, export, history,
-    legal, limiter::HostPacer, metrics, notify, report, runner, serve,
+    audit, browser, browser::BrowserOptions, browser::OpenOptions, checks, demo, doctor, export,
+    history, legal, limiter::HostPacer, metrics, notify, report, runner, serve,
 };
 use futures::stream::{self, StreamExt};
 use owo_colors::OwoColorize;
@@ -289,6 +289,24 @@ enum Command {
         #[arg(long)]
         addr: Option<SocketAddr>,
     },
+    /// Serve the bundled demo site so you can see what formwatch catches.
+    Demo {
+        /// Address to bind (default: 127.0.0.1:8099).
+        #[arg(long)]
+        addr: Option<SocketAddr>,
+    },
+    /// Delete old history runs, keeping the most recent ones.
+    Prune {
+        /// Keep only the N most recent runs of each form.
+        #[arg(long, conflicts_with = "keep_days")]
+        keep_last: Option<usize>,
+        /// Keep only runs newer than N days.
+        #[arg(long, conflicts_with = "keep_last")]
+        keep_days: Option<u64>,
+        /// Report what would be removed without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(serde::Deserialize)]
@@ -447,6 +465,41 @@ async fn main() -> Result<()> {
             };
             let history_dir = settings_history_dir(&globals, &config);
             serve::run(history_dir, addr).await?;
+        }
+        Command::Demo { addr } => {
+            let addr = addr.unwrap_or_else(|| "127.0.0.1:8099".parse().expect("valid default"));
+            demo::run(addr).await?;
+        }
+        Command::Prune {
+            keep_last,
+            keep_days,
+            dry_run,
+        } => {
+            let history_dir = settings_history_dir(&globals, &config);
+            let retain = match (
+                keep_last.or(config.keep_last),
+                keep_days.or(config.keep_days),
+            ) {
+                (Some(n), _) => history::Retain::Last(n),
+                (None, Some(d)) => history::Retain::Days(d),
+                (None, None) => bail!(
+                    "specify --keep-last N or --keep-days D (or set keep_last / keep_days in config)"
+                ),
+            };
+            let report = history::prune(
+                &history_dir,
+                retain,
+                dry_run,
+                chrono::Utc::now().timestamp(),
+            )?;
+            let verb = if dry_run { "would remove" } else { "removed" };
+            println!(
+                "{verb} {} run(s) across {} form(s); kept {}.",
+                report.removed, report.forms, report.kept
+            );
+            if dry_run {
+                println!("(dry run — nothing was deleted)");
+            }
         }
         Command::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -1279,10 +1332,25 @@ fn print_report(history_dir: &Path) -> Result<()> {
         );
         for check in &form.run.checks {
             print_check(check, form.flakiness_of(check).is_some(), false);
+            if let Some(streak) = form.streak_of(check) {
+                println!(
+                    "      \u{21b3} {} for the last {} run(s), since {}",
+                    streak.status,
+                    streak.count,
+                    human_ts(streak.since)
+                );
+            }
         }
         print_changes(&form.changes);
     }
     Ok(())
+}
+
+/// Formats a Unix timestamp for plain-text output.
+fn human_ts(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| ts.to_string())
 }
 
 #[cfg(test)]

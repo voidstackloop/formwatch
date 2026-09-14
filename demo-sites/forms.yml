@@ -1,0 +1,87 @@
+# Monitors the bundled demo site. Start it first:
+#
+#   formwatch demo            # serves on 127.0.0.1:8099
+#   formwatch monitor demo-sites/forms.yml
+#
+# Then `formwatch report --html` to browse the results.
+
+forms:
+  - name: Demo — good form (baseline)
+    url: http://127.0.0.1:8099/good-form.html
+  # Submission flow
+  - name: Demo — multi-step wizard
+    url: http://127.0.0.1:8099/multi-step.html
+  - name: Demo — slow step transition
+    url: http://127.0.0.1:8099/slow-step.html
+  - name: Demo — keyup-gated next
+    url: http://127.0.0.1:8099/keyup-next.html
+  - name: Demo — icon-only buttons
+    url: http://127.0.0.1:8099/icon-only-next.html
+  - name: Demo — no submit control
+    url: http://127.0.0.1:8099/no-submit-control.html
+  - name: Demo — open shadow root
+    url: http://127.0.0.1:8099/shadow-form.html
+  - name: Demo — nested shadow roots
+    url: http://127.0.0.1:8099/nested-shadow-form.html
+  - name: Demo — closed shadow root
+    url: http://127.0.0.1:8099/closed-shadow.html
+  - name: Demo — multiple forms
+    url: http://127.0.0.1:8099/multi-form.html
+  - name: Demo — RTL Arabic wizard
+    url: http://127.0.0.1:8099/rtl-arabic.html
+  # Accessibility
+  - name: Demo — missing labels
+    url: http://127.0.0.1:8099/missing-labels.html
+  - name: Demo — low contrast text
+    url: http://127.0.0.1:8099/low-contrast.html
+  - name: Demo — missing image alt
+    url: http://127.0.0.1:8099/missing-alt.html
+  - name: Demo — no landmarks
+    url: http://127.0.0.1:8099/no-landmarks.html
+  # Validation errors
+  - name: Demo — vague errors
+    url: http://127.0.0.1:8099/vague-errors.html
+  - name: Demo — ARIA-required only
+    url: http://127.0.0.1:8099/aria-required-only.html
+  - name: Demo — no required fields
+    url: http://127.0.0.1:8099/no-required-fields.html
+  - name: Demo — required checkbox
+    url: http://127.0.0.1:8099/checkbox-required-first.html
+  # Required documents
+  - name: Demo — unlabeled upload
+    url: http://127.0.0.1:8099/document-upload.html
+  - name: Demo — no format guidance
+    url: http://127.0.0.1:8099/no-format-guidance.html
+  - name: Demo — prose, no upload
+    url: http://127.0.0.1:8099/documents-prose-no-upload.html
+  - name: Demo — well-documented upload
+    url: http://127.0.0.1:8099/good-upload.html
+  # Autofill hints
+  - name: Demo — no autocomplete
+    url: http://127.0.0.1:8099/no-autocomplete.html
+  # Input persistence
+  - name: Demo — lost input
+    url: http://127.0.0.1:8099/lost-input.html
+  - name: Demo — session timeout
+    url: http://127.0.0.1:8099/session-timeout.html
+  - name: Demo — no text field
+    url: http://127.0.0.1:8099/no-text-field.html
+  # Mobile usability
+  - name: Demo — tiny tap targets
+    url: http://127.0.0.1:8099/tiny-targets.html
+  - name: Demo — horizontal overflow
+    url: http://127.0.0.1:8099/horizontal-overflow.html
+  # Bot protection
+  - name: Demo — reCAPTCHA widget
+    url: http://127.0.0.1:8099/captcha.html
+  - name: Demo — hCaptcha widget
+    url: http://127.0.0.1:8099/hcaptcha.html
+  - name: Demo — Cloudflare Turnstile
+    url: http://127.0.0.1:8099/turnstile.html
+  - name: Demo — Cloudflare challenge page
+    url: http://127.0.0.1:8099/cloudflare-challenge.html
+  - name: Demo — generic bot check
+    url: http://127.0.0.1:8099/generic-botcheck.html
+  # LLM wording
+  - name: Demo — unclear instructions
+    url: http://127.0.0.1:8099/instructions-unclear.html

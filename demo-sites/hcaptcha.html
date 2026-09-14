@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hCaptcha</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>hCaptcha widget</h1>
+  <p class="lede">An hCaptcha widget sits on an otherwise testable form —
+  Bot protection should Warn (never Fail), and the rest of the checks still
+  run.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" required aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <div class="h-captcha" data-sitekey="demo"></div>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

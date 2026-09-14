@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No text field</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>No text field</h1>
+  <p class="lede">The form has only a select and a checkbox, so there's
+  nowhere to test input persistence — Input persistence should Warn
+  ("no text field found") instead of silently passing.</p>
+
+  <form id="f">
+    <label for="pick">Choose a location</label>
+    <select id="pick" name="pick">
+      <option>North office</option>
+      <option>South office</option>
+    </select>
+    <label for="agree">I agree to the terms</label>
+    <input id="agree" name="agree" type="checkbox">
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

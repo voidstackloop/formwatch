@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>formwatch demo site</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>formwatch demo site</h1>
+  <p class="lede">A deliberately varied set of forms for seeing <em>every</em>
+  check and edge case formwatch handles — one clean baseline, and pages that
+  each trip a specific check or exercise a known platform limit. Start the
+  server with <code>formwatch demo</code>, then browse, or run formwatch
+  against them.</p>
+
+<pre><code>formwatch demo                       # serves this site on 127.0.0.1:8099
+formwatch test http://127.0.0.1:8099/good-form.html
+formwatch monitor demo-sites/forms.yml
+formwatch report --html --out report.html</code></pre>
+
+  <h2>Baseline</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/good-form.html">Good form</a></td><td>Everything Passes.</td></tr>
+  </tbody></table>
+
+  <h2>Submission flow</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/multi-step.html">Multi-step wizard</a></td><td>Passes after walking 3 steps.</td></tr>
+    <tr><td><a href="/slow-step.html">Slow step</a></td><td>Passes despite a 1.2s transition.</td></tr>
+    <tr><td><a href="/keyup-next.html">Keyup-gated next</a></td><td>Passes (Next enabled by typing).</td></tr>
+    <tr><td><a href="/icon-only-next.html">Icon-only buttons</a></td><td>Passes via <code>aria-label</code>.</td></tr>
+    <tr><td><a href="/no-submit-control.html">No submit control</a></td><td><strong>Fail</strong> — no Next/Continue/Submit.</td></tr>
+    <tr><td><a href="/shadow-form.html">Open shadow root</a></td><td>Passes — the form is found inside a web component.</td></tr>
+    <tr><td><a href="/nested-shadow-form.html">Nested shadow roots</a></td><td>Validation finds a field two shadow roots deep.</td></tr>
+    <tr><td><a href="/closed-shadow.html">Closed shadow root</a></td><td><strong>Fail</strong> "No <code>&lt;form&gt;</code> found" — a real platform limit.</td></tr>
+    <tr><td><a href="/multi-form.html">Multiple forms</a></td><td>Targets the bigger application form, not the header search.</td></tr>
+    <tr><td><a href="/rtl-arabic.html">RTL / Arabic wizard</a></td><td>Passes — recognizes التالي / إرسال.</td></tr>
+  </tbody></table>
+
+  <h2>Accessibility</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/missing-labels.html">Missing labels</a></td><td><strong>Fail</strong> — unlabeled fields.</td></tr>
+    <tr><td><a href="/low-contrast.html">Low contrast text</a></td><td><strong>Fail</strong> — axe color-contrast.</td></tr>
+    <tr><td><a href="/missing-alt.html">Missing image alt</a></td><td><strong>Fail</strong> — axe image-alt.</td></tr>
+    <tr><td><a href="/no-landmarks.html">No landmarks</a></td><td><strong>Warn</strong> — moderate axe findings.</td></tr>
+  </tbody></table>
+
+  <h2>Validation errors</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/vague-errors.html">Vague errors</a></td><td>Described but unhelpful wording; heuristics may pass (see LLM demo).</td></tr>
+    <tr><td><a href="/aria-required-only.html">ARIA-required only</a></td><td><strong>Warn</strong> — native validation can't exercise it.</td></tr>
+    <tr><td><a href="/no-required-fields.html">No required fields</a></td><td><strong>Warn</strong> — nothing to test.</td></tr>
+    <tr><td><a href="/checkbox-required-first.html">Required checkbox</a></td><td><strong>Fail</strong> — invalid with no accessible message.</td></tr>
+  </tbody></table>
+
+  <h2>Required documents</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/document-upload.html">Unlabeled upload</a></td><td><strong>Fail</strong> — no label, no format guidance.</td></tr>
+    <tr><td><a href="/no-format-guidance.html">No format guidance</a></td><td><strong>Warn</strong> — labeled but no accept/format text.</td></tr>
+    <tr><td><a href="/documents-prose-no-upload.html">Prose, no upload</a></td><td><strong>Warn</strong> — documents mentioned, no file input.</td></tr>
+    <tr><td><a href="/good-upload.html">Well-documented upload</a></td><td>Passes — labeled with <code>accept</code> + guidance.</td></tr>
+  </tbody></table>
+
+  <h2>Autofill hints</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/no-autocomplete.html">No autocomplete</a></td><td><strong>Warn</strong> — name/email/phone/address with no hints.</td></tr>
+  </tbody></table>
+
+  <h2>Input persistence</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/lost-input.html">Lost input</a></td><td><strong>Fail</strong> — the field silently clears.</td></tr>
+    <tr><td><a href="/session-timeout.html">Session timeout</a></td><td><strong>Warn</strong> — cleared, but explained.</td></tr>
+    <tr><td><a href="/no-text-field.html">No text field</a></td><td><strong>Warn</strong> — nothing to test.</td></tr>
+  </tbody></table>
+
+  <h2>Mobile usability</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/tiny-targets.html">Tiny tap targets</a></td><td><strong>Warn</strong> — sub-44px controls.</td></tr>
+    <tr><td><a href="/horizontal-overflow.html">Horizontal overflow</a></td><td><strong>Warn</strong> — content wider than a phone.</td></tr>
+  </tbody></table>
+
+  <h2>Bot protection</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/captcha.html">reCAPTCHA</a></td><td><strong>Warn</strong> — widget on a testable form.</td></tr>
+    <tr><td><a href="/hcaptcha.html">hCaptcha</a></td><td><strong>Warn</strong> — widget on a testable form.</td></tr>
+    <tr><td><a href="/turnstile.html">Cloudflare Turnstile</a></td><td><strong>Warn</strong> — widget on a testable form.</td></tr>
+    <tr><td><a href="/cloudflare-challenge.html">Cloudflare challenge</a></td><td><strong>Warn</strong> — full-page block, no form reached.</td></tr>
+    <tr><td><a href="/generic-botcheck.html">Generic bot check</a></td><td><strong>Warn</strong> — "prove you're not a robot" wording.</td></tr>
+  </tbody></table>
+
+  <h2>LLM wording (optional)</h2>
+  <table><thead><tr><th>Form</th><th>Expected</th></tr></thead><tbody>
+    <tr><td><a href="/vague-errors.html">Vague errors</a></td><td>Error wording — "Invalid input."</td></tr>
+    <tr><td><a href="/instructions-unclear.html">Unclear instructions</a></td><td>Instructions — vague upload guidance.</td></tr>
+  </tbody></table>
+
+  <p class="lede">Run everything at once with
+  <code>formwatch monitor demo-sites/forms.yml</code>, then
+  <code>formwatch report --html --out report.html</code>. See the repository's
+  legal notice (<code>docs/legal.md</code>) before pointing formwatch at any
+  site you don't control.</p>
+</main>
+</body>
+</html>

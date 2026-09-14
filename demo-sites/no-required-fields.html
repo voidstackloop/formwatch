@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No required fields</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>No required fields</h1>
+  <p class="lede">Nothing is marked required or aria-required, so native
+  validation has nothing to test — Validation errors should Warn rather
+  than claim a false Pass.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name">
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

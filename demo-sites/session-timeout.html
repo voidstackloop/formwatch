@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session timeout</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Session timeout</h1>
+  <p class="lede">A moment after you type, the field is cleared <em>and</em>
+  a session-expiry notice appears — Input persistence should Warn (the loss
+  is explained), not Fail. Compare <a href="/lost-input.html">lost-input.html</a>.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" required aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+
+  <p id="notice" hidden style="color:#a11">Your session has expired. Please log in again.</p>
+
+  <script>
+    // NB: not `var name` — that collides with window.name.
+    var nameField = document.getElementById('name');
+    nameField.addEventListener('input', function () {
+      setTimeout(function () {
+        nameField.value = '';
+        document.getElementById('notice').hidden = false;
+      }, 900);
+    });
+  </script>
+</main>
+</body>
+</html>

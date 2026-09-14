@@ -33,6 +33,8 @@ pub mod browser;
 pub mod checks;
 /// Configuration file and environment-variable support.
 pub mod config;
+/// Bundled demo site (`formwatch demo`).
+pub mod demo;
 /// Environment self-check (`formwatch doctor`).
 pub mod doctor;
 /// The library's structured error type.

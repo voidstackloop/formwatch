@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multiple forms on one page</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Multiple forms on one page</h1>
+  <p class="lede">A small header search form comes first; the real
+  application form has more fields. formwatch targets the form with the
+  most fields, not the first in the document — so it fills, validates, and
+  submits the right one.</p>
+
+  <form id="search">
+    <label for="q">Search this site</label>
+    <input id="q" name="q" type="search">
+    <button type="submit">Go</button>
+  </form>
+
+  <form id="apply">
+    <label for="an">Full name</label>
+    <input id="an" name="an" type="text" autocomplete="name" required aria-describedby="ah">
+    <small id="ah">As it appears on your ID.</small>
+    <label for="ae">Email address</label>
+    <input id="ae" name="ae" type="email" autocomplete="email" required aria-describedby="aeh">
+    <small id="aeh">We&rsquo;ll email your confirmation.</small>
+    <p><button type="submit">Apply</button></p>
+  </form>
+</main>
+</body>
+</html>

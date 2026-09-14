@@ -75,6 +75,34 @@ project doesn't have a release yet, so everything below is grouped under
   Ctrl-C. Deliberately read-only — no endpoint accepts a URL, triggers a
   run, or submits anything, so exposing it can't make formwatch touch a
   third-party site.
+- History **retention**: `formwatch prune (--keep-last N | --keep-days D)
+  [--dry-run]` (defaults via `keep_last`/`keep_days` config or
+  `FORMWATCH_KEEP_LAST`/`FORMWATCH_KEEP_DAYS`) trims append-only history
+  per form, touching only `*.json` run files.
+- **Streak/trend reporting**: the report now computes each check's
+  unbroken run of its current status. The plain-text report adds a
+  `↳ FAIL for the last N run(s), since <date>` line for chronic
+  non-Pass checks, and the HTML report adds a streak badge plus a compact
+  coloured trend strip of recent runs.
+- The HTML report gained a client-side toolbar: search by name/URL, filter
+  by status (failing / warnings / flaky / passing), sort by recency,
+  severity, or name, and a live "shown/total" count — all self-contained,
+  no external assets.
+- A bundled **demo site** (`formwatch demo`, pages under `demo-sites/`)
+  with 35 deliberately varied forms covering **every** built-in check and
+  known edge case: a clean baseline; missing labels / low contrast /
+  missing alt / no landmarks; small tap targets and horizontal overflow;
+  validation variants (vague errors, aria-required-only, no required
+  fields, a required checkbox); document-upload variants; autofill;
+  lost input vs. explained session loss; multi-step wizards including
+  slow, keyup-gated, and icon-only-next variants; open, nested, and closed
+  shadow roots; multiple forms on a page; RTL Arabic; reCAPTCHA, hCaptcha,
+  Turnstile, and a full-page Cloudflare challenge; and the LLM-wording
+  demos. Pages are compiled into the binary, so `cargo install` gets them;
+  nothing third-party is contacted.
+- `scripts/benchmark.sh` + [BENCHMARKS.md](BENCHMARKS.md): a reproducible
+  benchmark over the demo site (9 forms / 72 checks, median 4.4s at
+  `--wait 1`), with methodology and caveats.
 - Structured diagnostics via `tracing`, written to **stderr** so
   machine-readable stdout is never corrupted: `-v`/`-vv`/`--quiet` and
   `--log-format json`.
@@ -160,6 +188,20 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Fixed
 
+- Mobile usability never reported horizontal overflow: the check compared
+  `document.documentElement.scrollWidth` against `window.innerWidth`, but
+  under mobile emulation `innerWidth` already reflects the overflowed
+  width, so the comparison was never true even on a page far wider than a
+  phone. It now compares against the layout viewport
+  (`documentElement.clientWidth`). Found while building the demo site, and
+  now covered by a fixture + regression test.
+- The validation check counted the `<form>` element itself as an unlabeled
+  invalid field: the invalid-field query used a bare `:invalid` scoped at
+  the form, and `form:invalid` matches whenever any control inside is
+  invalid. A form whose *actual* invalid field had a proper
+  `aria-describedby` was therefore failed. Found by building the demo
+  site; fixed to query `input:invalid, select:invalid, textarea:invalid,
+  [aria-invalid=true]`, with a regression fixture and test.
 - A truly **cold** Chrome cache failed to populate: the concurrent-safe
   download created the cache's parent directory but never the private
   temp directory the fetcher writes its archive into, so the very first

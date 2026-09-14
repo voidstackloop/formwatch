@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Well-documented upload</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Well-documented upload</h1>
+  <p class="lede">A labeled file input with an <code>accept</code>
+  attribute and format guidance — Required documents should Pass. Compare
+  with <a href="/document-upload.html">document-upload.html</a>.</p>
+
+  <form id="f">
+    <label for="bill">Recent utility bill</label>
+    <input id="bill" name="bill" type="file" accept="application/pdf">
+    <small class="hint">PDF only, up to 5&nbsp;MB, dated within 60 days.</small>
+    <p><button type="submit">Upload</button></p>
+  </form>
+</main>
+</body>
+</html>

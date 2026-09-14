@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARIA-required only</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>ARIA-required only</h1>
+  <p class="lede">The field is required via <code>aria-required</code> but
+  not the native <code>required</code> attribute, so the browser's own
+  validation never exercises it — Validation errors should Warn (not a
+  false Pass).</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" aria-required="true" aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

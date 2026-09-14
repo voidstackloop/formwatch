@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Form in a closed shadow root</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Closed shadow root</h1>
+  <p class="lede">This form lives in a <strong>closed</strong> shadow root —
+  genuinely, deliberately invisible to any outside code (the platform's own
+  encapsulation). formwatch reports "No <code>&lt;form&gt;</code> element
+  found" rather than pretending it passed. This is a real limit, not a bug.</p>
+  <closed-form></closed-form>
+</main>
+
+<script>
+  customElements.define('closed-form', class extends HTMLElement {
+    connectedCallback() {
+      var r = this.attachShadow({ mode: 'closed' });
+      r.innerHTML =
+        '<form id="f"><label for="n">Full name</label>' +
+        '<input id="n" name="n" type="text"><button type="submit">Submit</button></form>';
+    }
+  });
+</script>
+</body>
+</html>

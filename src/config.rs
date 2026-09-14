@@ -132,6 +132,10 @@ pub struct Config {
     pub baseline: Option<PathBuf>,
     /// Address for `formwatch serve`, e.g. `127.0.0.1:8080`.
     pub serve_addr: Option<String>,
+    /// Default retention for `formwatch prune`: keep the last N runs.
+    pub keep_last: Option<usize>,
+    /// Default retention for `formwatch prune`: keep runs newer than N days.
+    pub keep_days: Option<u64>,
     /// Record acknowledgment of the authorized-use notice.
     pub accept_terms: Option<bool>,
     /// Which status makes the process exit non-zero (`fail` or `warn`).
@@ -215,6 +219,8 @@ impl Config {
         set!(audit_log, "FORMWATCH_AUDIT_LOG", env_path);
         set!(baseline, "FORMWATCH_BASELINE", env_path);
         set!(serve_addr, "FORMWATCH_SERVE_ADDR", env_parse);
+        set!(keep_last, "FORMWATCH_KEEP_LAST", env_parse);
+        set!(keep_days, "FORMWATCH_KEEP_DAYS", env_parse);
         set!(accept_terms, "FORMWATCH_ACCEPT_TERMS", env_bool);
         set!(fail_on, "FORMWATCH_FAIL_ON", env_fail_on);
 

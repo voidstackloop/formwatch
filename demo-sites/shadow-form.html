@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Form in an open shadow root</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Form in an open shadow root</h1>
+  <p class="lede">The real form lives inside a web component's open shadow
+  root. Plain <code>querySelectorAll</code> can't see it; formwatch's deep
+  query pierces it, so Submission flow should Pass instead of reporting
+  "no form found".</p>
+  <apply-form></apply-form>
+</main>
+
+<script>
+  customElements.define('apply-form', class extends HTMLElement {
+    connectedCallback() {
+      var root = this.attachShadow({ mode: 'open' });
+      root.innerHTML =
+        '<style>label{display:block;margin-top:.75rem}input,button{min-height:44px;width:100%;box-sizing:border-box}</style>' +
+        '<form id="f">' +
+        '<label for="sname">Full name</label>' +
+        '<input id="sname" name="sname" type="text" autocomplete="name" required aria-describedby="sname-help">' +
+        '<small id="sname-help">As it appears on your ID.</small>' +
+        '<p><button type="submit">Submit</button></p>' +
+        '</form>';
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report a pothole</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Report a pothole</h1>
+  <p class="lede">The error text reads only &ldquo;Invalid input.&rdquo; with
+  no indication of what's wrong or which field. This is the demo for the
+  optional LLM wording checks (<code>formwatch --llm test ...</code>);
+  heuristic checks see a described error and may pass.</p>
+
+  <form id="pothole">
+    <label for="location">Street location</label>
+    <input id="location" name="location" type="text" autocomplete="off" required aria-describedby="err">
+
+    <label for="depth">Approximate depth (cm)</label>
+    <input id="depth" name="depth" type="number" required aria-describedby="err">
+
+    <div id="err" role="alert" class="error">Invalid input.</div>
+    <p><button type="submit">Report</button></p>
+  </form>
+</main>
+</body>
+</html>

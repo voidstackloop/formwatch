@@ -7,6 +7,6 @@ community-forms/
 docs/
 fixtures/
 tests/
-index.html
+/index.html
 *.md
 !README.md

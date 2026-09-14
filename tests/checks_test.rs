@@ -523,6 +523,25 @@ async fn mobile_usability_flags_small_tap_targets() {
 }
 
 #[tokio::test]
+async fn mobile_usability_flags_horizontal_overflow() {
+    // fixtures/horizontal-overflow.html has a 1200px-wide element on a
+    // page whose meta viewport makes 375px the layout width. Regression
+    // coverage for the overflow half of the mobile check, which the
+    // tap-target test above never exercised.
+    let (_browser, page, _handle) = open_fixture("horizontal-overflow.html").await;
+    let result = checks::check_mobile_usability(&page)
+        .await
+        .expect("check_mobile_usability");
+    assert!(
+        result
+            .detail
+            .contains("Horizontal overflow at 375px width: true"),
+        "expected overflow to be detected, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
 async fn run_custom_checks_runs_every_script_and_names_by_filename() {
     // fixtures/custom-checks/ has three scripts covering the three
     // branches run_custom_checks handles: a real Pass, a real Fail, and
@@ -699,6 +718,31 @@ async fn ordinary_form_with_no_challenge_passes_bot_protection() {
     let result = checks::check_bot_protection(&page)
         .await
         .expect("check_bot_protection");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}
+
+#[tokio::test]
+async fn a_described_required_field_is_not_counted_as_unlabeled_invalid() {
+    // Regression test found by building the demo site: the invalid-field
+    // query was scoped at the form with a bare `:invalid`, and `form:invalid`
+    // matches whenever any control inside is invalid — so the form element
+    // itself (which has no aria-describedby) was counted as an unlabeled
+    // invalid field. A form whose *actual* invalid field has a proper
+    // accessible description was therefore failed.
+    let (_browser, page, _handle) = open_fixture("described-required-form.html").await;
+    checks::check_submission_flow(&page, false)
+        .await
+        .expect("fill+validate");
+    let result = checks::check_validation_errors(&page)
+        .await
+        .expect("check_validation_errors");
+    assert!(
+        result
+            .detail
+            .contains("without a screen-reader-visible error message: 0"),
+        "got: {}",
+        result.detail
+    );
     assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
 }
 

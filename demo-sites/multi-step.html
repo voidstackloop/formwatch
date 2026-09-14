@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Business license renewal</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Renew a business license</h1>
+  <p class="lede">A three-step wizard. formwatch fills each step, clicks
+  Continue, and reaches the final Submit — Submission flow should Pass.</p>
+
+  <form id="wizard">
+    <fieldset id="step1">
+      <legend>Step 1 of 3 &mdash; Applicant</legend>
+      <label for="s1name">Full name</label>
+      <input id="s1name" name="s1name" type="text" autocomplete="name" required>
+      <p><button type="button" onclick="go(2)">Continue</button></p>
+    </fieldset>
+
+    <fieldset id="step2" hidden>
+      <legend>Step 2 of 3 &mdash; Business</legend>
+      <label for="s2biz">Business name</label>
+      <input id="s2biz" name="s2biz" type="text" required disabled>
+      <p><button type="button" onclick="go(3)">Continue</button></p>
+    </fieldset>
+
+    <fieldset id="step3" hidden>
+      <legend>Step 3 of 3 &mdash; Review</legend>
+      <label for="s3ref">License number</label>
+      <input id="s3ref" name="s3ref" type="text" required disabled>
+      <p><button type="submit">Submit</button></p>
+    </fieldset>
+  </form>
+
+  <script>
+    function go(n) {
+      for (var i = 1; i <= 3; i++) {
+        var step = document.getElementById('step' + i);
+        step.hidden = (i !== n);
+        // Disable a hidden step's controls, as a real wizard must: hidden
+        // required fields are otherwise invalid and would block the final
+        // submit for no good reason.
+        var fields = step.querySelectorAll('input, select, textarea');
+        for (var j = 0; j < fields.length; j++) fields[j].disabled = (i !== n);
+      }
+    }
+  </script>
+</main>
+</body>
+</html>

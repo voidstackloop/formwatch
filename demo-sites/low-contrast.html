@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Low contrast text</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Low contrast text</h1>
+  <p class="lede">The note below is nearly the same lightness as the
+  background — Accessibility should Fail (axe color-contrast, serious).</p>
+  <p style="color:#cfcfcf">Your application will be reviewed within ten business days.</p>
+
+  <form id="f">
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text" autocomplete="name" required aria-describedby="name-help">
+    <small class="hint" id="name-help">As it appears on your ID.</small>
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>

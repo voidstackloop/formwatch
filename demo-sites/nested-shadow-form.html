@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nested shadow roots</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Nested shadow roots</h1>
+  <p class="lede">A second open shadow root is nested <em>inside</em> the
+  form. Validation should still find the required field three levels deep.</p>
+  <outer-form></outer-form>
+</main>
+
+<script>
+  customElements.define('inner-field', class extends HTMLElement {
+    connectedCallback() {
+      var r = this.attachShadow({ mode: 'open' });
+      r.innerHTML =
+        '<style>label{display:block}input{min-height:44px;width:100%;box-sizing:border-box}</style>' +
+        '<label for="inner">Reference number</label>' +
+        '<input id="inner" name="inner" type="text" required aria-describedby="ih">' +
+        '<small id="ih">Your reference number.</small>';
+    }
+  });
+  customElements.define('outer-form', class extends HTMLElement {
+    connectedCallback() {
+      var r = this.attachShadow({ mode: 'open' });
+      r.innerHTML =
+        '<style>label{display:block;margin-top:.75rem}input,button{min-height:44px;width:100%;box-sizing:border-box}</style>' +
+        '<form id="f">' +
+        '<label for="oname">Full name</label>' +
+        '<input id="oname" name="oname" type="text" autocomplete="name" required aria-describedby="oh">' +
+        '<small id="oh">As it appears on your ID.</small>' +
+        '<inner-field></inner-field>' +
+        '<p><button type="submit">Submit</button></p>' +
+        '</form>';
+    }
+  });
+</script>
+</body>
+</html>

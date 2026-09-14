@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slow step transition</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Slow step transition</h1>
+  <p class="lede">This wizard's Continue takes 1.2s to reveal the next step
+  (an animation, or a network-dependent step). formwatch polls rather than
+  assuming a fixed delay, so Submission flow should still Pass.</p>
+
+  <form id="wizard">
+    <fieldset id="s1">
+      <legend>Step 1 of 2</legend>
+      <label for="s1name">Full name</label>
+      <input id="s1name" name="s1name" type="text" autocomplete="name">
+      <p><button type="button" id="next">Continue</button></p>
+    </fieldset>
+    <fieldset id="s2" hidden>
+      <legend>Step 2 of 2</legend>
+      <label for="s2ref">Reference number</label>
+      <input id="s2ref" name="s2ref" type="text">
+      <p><button type="submit">Submit</button></p>
+    </fieldset>
+  </form>
+
+  <script>
+    document.getElementById('next').addEventListener('click', function () {
+      setTimeout(function () {
+        document.getElementById('s1').hidden = true;
+        document.getElementById('s2').hidden = false;
+      }, 1200);
+    });
+  </script>
+</main>
+</body>
+</html>

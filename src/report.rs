@@ -1,9 +1,36 @@
-use crate::checks::CheckResult;
-use crate::history::{self, CheckChange, Flakiness, RunResult};
+use crate::checks::{CheckResult, Status};
+use crate::history::{self, CheckChange, CheckStreak, Flakiness, RunResult};
 use anyhow::Result;
 use askama::Template;
 use chrono::DateTime;
 use std::path::Path;
+
+/// How many recent runs the compact trend strip covers.
+const TREND_LEN: usize = 20;
+
+fn severity(status: Status) -> u8 {
+    match status {
+        Status::Pass => 0,
+        Status::Warn => 1,
+        Status::Fail => 2,
+    }
+}
+
+/// Each of the last [`TREND_LEN`] runs reduced to its worst check status
+/// (oldest first), for at-a-glance trend rendering.
+fn trend(runs: &[RunResult]) -> Vec<Status> {
+    let start = runs.len().saturating_sub(TREND_LEN);
+    runs[start..]
+        .iter()
+        .map(|run| {
+            run.checks
+                .iter()
+                .map(|c| c.status)
+                .max_by_key(|s| severity(*s))
+                .unwrap_or(Status::Pass)
+        })
+        .collect()
+}
 
 /// One form's entry in a report: its latest run, what changed since the
 /// run before that (empty if there wasn't one, or nothing changed), and
@@ -17,6 +44,12 @@ pub struct FormReport {
     /// *entire* recorded history, not just the last two runs — see
     /// [`history::flakiness`].
     pub flaky: Vec<Flakiness>,
+    /// Every current check's unbroken run of its present status — see
+    /// [`history::streaks`].
+    pub streaks: Vec<CheckStreak>,
+    /// The last few runs' overall severity (oldest first), for a compact
+    /// trend strip.
+    pub trend: Vec<Status>,
     /// `run.timestamp`, formatted for display (e.g. `"2026-09-11 14:30
     /// UTC"`) rather than a raw Unix timestamp.
     pub when: String,
@@ -31,6 +64,30 @@ impl FormReport {
         self.flaky
             .iter()
             .find(|f| f.name == check.name && f.is_flaky())
+    }
+
+    /// This check's current streak, if it's worth showing (2+ consecutive
+    /// runs in the same non-Pass state).
+    pub fn streak_of(&self, check: &CheckResult) -> Option<&CheckStreak> {
+        self.streaks
+            .iter()
+            .find(|s| s.name == check.name && s.count >= 2 && s.status != Status::Pass)
+    }
+
+    /// The form's worst check status as a `0=pass, 1=warn, 2=fail` code,
+    /// for client-side filtering/sorting in the HTML report.
+    pub fn worst(&self) -> u8 {
+        self.run
+            .checks
+            .iter()
+            .map(|c| severity(c.status))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Whether any check has been flagged flaky.
+    pub fn has_flaky(&self) -> bool {
+        self.flaky.iter().any(|f| f.is_flaky())
     }
 }
 
@@ -73,11 +130,15 @@ pub fn build(history_dir: &Path) -> Result<ReportTemplate> {
             .map(|prev| history::diff(prev, &run))
             .unwrap_or_default();
         let flaky = history::flakiness(&prior_runs);
+        let streaks = history::streaks(&prior_runs);
+        let trend = trend(&prior_runs);
         let when = human_time(run.timestamp);
         forms.push(FormReport {
             run,
             changes,
             flaky,
+            streaks,
+            trend,
             when,
         });
     }
@@ -209,6 +270,42 @@ mod tests {
             form.flakiness_of(sustained_check).is_none(),
             "a check with a single sustained change is a real regression, not flakiness"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rendered_html_has_the_filter_toolbar_and_data_attributes() {
+        let dir = std::env::temp_dir().join("formwatch-test-report-html");
+        let _ = std::fs::remove_dir_all(&dir);
+        history::save_run(
+            &dir,
+            &RunResult {
+                schema_version: history::SCHEMA_VERSION,
+                name: "Permit".into(),
+                url: "https://city.gov/permit".into(),
+                timestamp: 1,
+                checks: vec![CheckResult {
+                    name: "Accessibility".into(),
+                    status: Status::Fail,
+                    detail: "nope".into(),
+                    screenshot: None,
+                }],
+            },
+        )
+        .expect("save");
+
+        let html = render_html(&dir).expect("render");
+        for needle in [
+            "id=\"q\"",
+            "id=\"forms\"",
+            "id=\"sort\"",
+            "data-filter=\"flaky\"",
+            "data-worst=\"2\"",
+            "class=\"trend\"",
+        ] {
+            assert!(html.contains(needle), "rendered report missing {needle:?}");
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

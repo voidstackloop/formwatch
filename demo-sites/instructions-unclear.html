@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unclear instructions</title>
+<link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+<main>
+  <h1>Unclear instructions</h1>
+  <p class="lede">The guidance is vague ("Submit the thing.") and the file
+  input gives no format or size. This is the demo for the optional LLM
+  Instructions check (<code>formwatch --llm test ...</code>); heuristics
+  mostly miss it.</p>
+  <p>Submit the thing. Upload it below. If it doesn&rsquo;t work, try again.</p>
+
+  <form id="f">
+    <label for="doc">Document</label>
+    <input id="doc" name="doc" type="file">
+    <p><button type="submit">Submit</button></p>
+  </form>
+</main>
+</body>
+</html>
