@@ -22,6 +22,20 @@ project doesn't have a release yet, so everything below is grouped under
   for containers, and per-host request pacing (`--per-host-delay-ms`)
   plus an append-only, screenshot-free JSON audit log (`--audit-log`).
 
+### Performance
+
+- **LLM client reuse across a whole `monitor` run.** `--llm` semantic
+  checks used to build a brand-new HTTP client (`LlmClient::new`) for
+  every single form, discarding its connection pool immediately after —
+  so a registry of N forms paid N separate DNS/TCP/TLS handshakes to the
+  same provider host (openai.com, anthropic.com, ...) even though every
+  form talks to the identical endpoint. The client is now built once per
+  `test`/`monitor` invocation and passed by reference into every
+  concurrent form task (`runner::run_one_with`'s new `llm_client`
+  parameter), so the connection pool is actually shared. Client-build
+  failure (rare) is now logged once instead of once per form, and still
+  degrades every form's LLM checks to a `Warn`, never a dropped run.
+
 ### Added
 
 - **GitHub Issues auto-tracking** (`--github-issues-repo owner/repo`,

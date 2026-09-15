@@ -540,8 +540,16 @@ async fn run_one(
 /// empty vec when the feature is disabled). A configuration that prevents
 /// any call — no API key — yields a single explanatory `Warn` rather than
 /// silently doing nothing.
+///
+/// `client` is built once per `test`/`monitor` invocation (see
+/// [`LlmClient::new`]) and shared across every form, so concurrent forms
+/// reuse one HTTP connection pool to the provider instead of each paying a
+/// fresh DNS/TCP/TLS handshake. `None` means the client failed to build
+/// (surfaced once by the caller); this still degrades to a `Warn`, never a
+/// dropped run.
 pub async fn run_semantic_checks(
     page: &Page,
+    client: Option<&LlmClient>,
     options: &LlmOptions,
     capture: bool,
 ) -> Vec<CheckResult> {
@@ -559,6 +567,13 @@ pub async fn run_semantic_checks(
             ),
         )];
     }
+    let Some(client) = client else {
+        return vec![result(
+            "LLM review",
+            Status::Warn,
+            "could not initialize the LLM client".to_string(),
+        )];
+    };
 
     tracing::warn!(
         provider = options.provider.label(),
@@ -567,22 +582,11 @@ pub async fn run_semantic_checks(
         "LLM semantic checks enabled — page text is sent to the configured provider"
     );
 
-    let client = match LlmClient::new(options) {
-        Ok(client) => client,
-        Err(e) => {
-            return vec![result(
-                "LLM review",
-                Status::Warn,
-                format!("could not initialize the LLM client: {e:#}"),
-            )];
-        }
-    };
-
     // The two checks are independent; run them concurrently so the LLM
     // latency is paid once, not twice.
     let (errors, instructions) = tokio::join!(
-        run_one(page, &client, options, capture, &ERROR_KIND),
-        run_one(page, &client, options, capture, &INSTRUCTION_KIND),
+        run_one(page, client, options, capture, &ERROR_KIND),
+        run_one(page, client, options, capture, &INSTRUCTION_KIND),
     );
     vec![errors, instructions]
 }

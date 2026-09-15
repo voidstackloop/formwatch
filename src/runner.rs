@@ -35,11 +35,19 @@ pub async fn run_one(
         },
         &browser::OpenOptions::default(),
         checks_dir,
+        None,
     )
     .await
 }
 
 /// [`run_one`], honoring caller-supplied run and browser-open options.
+///
+/// `llm_client` should be built once per `test`/`monitor` invocation (not
+/// once per form) and passed by reference to every call, so concurrent
+/// forms share one HTTP connection pool to the LLM provider instead of each
+/// paying a fresh handshake. Pass `None` when `opts.llm` is `None` or the
+/// client failed to build.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_one_with(
     browser: &Browser,
     history_dir: &Path,
@@ -48,6 +56,7 @@ pub async fn run_one_with(
     opts: &options::RunOptions,
     open_opts: &browser::OpenOptions,
     checks_dir: Option<&Path>,
+    llm_client: Option<&crate::llm::LlmClient>,
 ) -> Result<history::RunResult> {
     let checks = match browser::open_with(browser, &url, open_opts).await {
         Ok(page) => {
@@ -64,7 +73,9 @@ pub async fn run_one_with(
                 }
             }
             if let Some(llm) = &opts.llm {
-                checks.extend(crate::llm::run_semantic_checks(&page, llm, opts.screenshots).await);
+                checks.extend(
+                    crate::llm::run_semantic_checks(&page, llm_client, llm, opts.screenshots).await,
+                );
             }
             let _ = page.close().await;
             checks

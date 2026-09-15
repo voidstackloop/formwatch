@@ -762,7 +762,8 @@ async fn llm_semantic_checks_run_against_a_page_with_the_mock_provider() {
         cache: false,
         ..formwatch::llm::LlmOptions::default()
     };
-    let results = formwatch::llm::run_semantic_checks(&page, &options, false).await;
+    let client = formwatch::llm::LlmClient::new(&options).expect("client");
+    let results = formwatch::llm::run_semantic_checks(&page, Some(&client), &options, false).await;
 
     assert_eq!(results.len(), 2, "expected two LLM checks: {results:#?}");
     for check in &results {

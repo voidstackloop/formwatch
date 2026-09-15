@@ -440,6 +440,10 @@ Design guarantees:
 - **Subjective by nature**, so a low score is a `Warn` by default; use
   `--llm-fail` (or `llm.fail: true`) to make it a `Fail`, and
   `--llm-threshold N` to set the pass bar.
+- **One shared HTTP client per run.** `monitor` builds the LLM client
+  once and reuses it for every form (including concurrent ones under
+  `--max-concurrent`), so a large registry pays one connection pool to
+  the provider instead of a fresh DNS/TCP/TLS handshake per form.
 
 Providers are `openai` (also any OpenAI-compatible endpoint), `anthropic`,
 and `mock` (no network — deterministic, for dry runs and CI of the tool

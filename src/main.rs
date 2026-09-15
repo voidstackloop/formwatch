@@ -4,8 +4,8 @@ use clap_complete::Shell;
 use formwatch::baseline::{self, Baseline};
 use formwatch::config::{Config, FailOn, LlmConfig, NotifyOn};
 use formwatch::limiter::host_of;
-use formwatch::llm::LlmOptions;
 use formwatch::llm::provider::Provider;
+use formwatch::llm::{LlmClient, LlmOptions};
 use formwatch::logging::{self, LogFormat};
 use formwatch::options::RunOptions;
 use formwatch::shard::Shard;
@@ -556,6 +556,7 @@ async fn main() -> Result<()> {
 
             let (browser, _handle) = browser::launch_with(&settings.browser).await?;
             let pacer = HostPacer::new(Duration::from_millis(settings.per_host_delay_ms));
+            let llm_client = build_llm_client(&settings.run.llm);
             if let Some(host) = host_of(&url) {
                 pacer.wait_turn(&host).await;
             }
@@ -567,6 +568,7 @@ async fn main() -> Result<()> {
                 &settings.run,
                 &settings.open,
                 settings.checks_dir.as_deref(),
+                llm_client.as_ref(),
             )
             .await?;
             if let Some(path) = &settings.audit_log {
@@ -653,6 +655,7 @@ async fn main() -> Result<()> {
 
             let (browser, _handle) = browser::launch_with(&settings.browser).await?;
             let pacer = HostPacer::new(Duration::from_millis(settings.per_host_delay_ms));
+            let llm_client = build_llm_client(&settings.run.llm);
             let run_opts = &settings.run;
             let open_opts = &settings.open;
             let checks_dir_ref = settings.checks_dir.as_deref();
@@ -665,6 +668,7 @@ async fn main() -> Result<()> {
             .map(|(i, entry)| {
                 let browser = &browser;
                 let pacer = &pacer;
+                let llm_client = llm_client.as_ref();
                 async move {
                     if let Some(host) = host_of(&entry.url) {
                         pacer.wait_turn(&host).await;
@@ -677,6 +681,7 @@ async fn main() -> Result<()> {
                         run_opts,
                         open_opts,
                         checks_dir_ref,
+                        llm_client,
                     )
                     .await
                     {
@@ -905,6 +910,25 @@ fn resolve(
         github_issues: resolve_github_issues(github_issues_repo, config),
         accepted,
         fail_on: globals.fail_on.or(config.fail_on).unwrap_or(FailOn::Fail),
+    }
+}
+
+/// Builds the shared [`LlmClient`] once per `test`/`monitor` invocation, so
+/// every form's LLM checks reuse one HTTP connection pool instead of each
+/// paying a fresh handshake to the provider. `None` when LLM checks are
+/// disabled, or (rare) client construction failed — logged once here
+/// rather than once per form.
+fn build_llm_client(llm: &Option<LlmOptions>) -> Option<LlmClient> {
+    let options = llm.as_ref()?;
+    match LlmClient::new(options) {
+        Ok(client) => Some(client),
+        Err(e) => {
+            tracing::warn!(
+                error = format!("{e:#}"),
+                "could not initialize the LLM client; LLM checks will be skipped this run"
+            );
+            None
+        }
     }
 }
 
@@ -1491,6 +1515,21 @@ mod tests {
             timestamp: 0,
             checks,
         }
+    }
+
+    #[test]
+    fn build_llm_client_is_none_when_disabled_and_some_when_enabled() {
+        // The client is built once per invocation (not once per form, see
+        // runner::run_one_with) — this only checks the wiring itself: no
+        // options means no client, and enabled options (Mock needs no API
+        // key) build one successfully rather than erroring.
+        assert!(build_llm_client(&None).is_none());
+        let options = LlmOptions {
+            enabled: true,
+            provider: Provider::Mock,
+            ..LlmOptions::default()
+        };
+        assert!(build_llm_client(&Some(options)).is_some());
     }
 
     #[test]
