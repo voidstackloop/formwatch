@@ -24,6 +24,15 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Performance
 
+- **`prune` no longer opens or parses any run file.** Same anti-pattern
+  as `all_known_forms` below, in the one command whose entire job is
+  handling a *lot* of accumulated history: `history::prune` read and
+  fully deserialized every run's JSON just to sort by `run.timestamp`,
+  which `save_run` already writes into the filename. Retention
+  decisions are now made from filenames alone — `prune` never touches a
+  run's content at all, so a deployment that's been running `monitor`
+  nightly for months prunes exactly as fast as one just getting
+  started.
 - **`all_known_forms` no longer parses every historical run to find the
   newest one.** `history::all_known_forms` — behind `formwatch report`,
   `serve`'s `/metrics`/`/api/forms`, and `baseline --write` — picked each

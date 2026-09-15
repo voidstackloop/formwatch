@@ -525,6 +525,11 @@ newest runs. Defaults can live in config (`keep_last:` / `keep_days:`) or
 `*.json` run files and leaves anything else in the history directory
 alone. Run it from the same cron/Action that runs `monitor`.
 
+Retention decisions come entirely from filenames (each run's timestamp
+is already encoded there) — `prune` never opens or parses a run's
+content, so it stays cheap no matter how much history has accumulated
+or how much screenshot data those runs carry.
+
 ## Container
 
 A multi-stage `Dockerfile` builds a small Debian image with Chromium and

@@ -346,6 +346,13 @@ pub struct PruneReport {
 /// Deletes history runs per `retain`, per form. `now` is passed in so the
 /// `Days` policy is testable; `dry_run` computes the outcome without
 /// touching disk. Other files in a form directory are left alone.
+///
+/// Retention is decided from filename timestamps alone (see
+/// [`timestamp_from_filename`]) — a run file is never opened or parsed,
+/// so pruning a long-lived history stays cheap regardless of how many
+/// runs (or how much embedded screenshot data) it holds. A `.json` file
+/// whose name doesn't carry a recognizable timestamp is left alone,
+/// consistent with "other files in a form directory are left alone."
 pub fn prune(base: &Path, retain: Retain, dry_run: bool, now: i64) -> Result<PruneReport> {
     let mut report = PruneReport::default();
     if !base.exists() {
@@ -364,9 +371,10 @@ pub fn prune(base: &Path, retain: Retain, dry_run: bool, now: i64) -> Result<Pru
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let run: RunResult = serde_json::from_str(&fs::read_to_string(&path)?)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            runs.push((run.timestamp, path));
+            let Some(ts) = timestamp_from_filename(&path) else {
+                continue;
+            };
+            runs.push((ts, path));
         }
         // Oldest first; filename breaks ties so same-second runs (with a
         // `-N` suffix) stay a stable, total order.
@@ -735,6 +743,33 @@ mod tests {
             load_runs(&dir, "https://city.gov/a").expect("load").len(),
             2
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_does_not_need_to_parse_any_run_file() {
+        // Retention decisions come from filename timestamps alone, never
+        // by parsing run content — proven by corrupting every file:
+        // prune must still count and remove the right ones.
+        let dir = std::env::temp_dir().join("formwatch-test-prune-corrupt");
+        let _ = fs::remove_dir_all(&dir);
+        let url = "https://city.gov/a";
+        for ts in 1..=4 {
+            save_run(&dir, &run_at(url, ts)).expect("save");
+        }
+        for ts in 1..=4 {
+            fs::write(
+                dir_for(&dir, url).join(format!("{ts}.json")),
+                "{not valid json",
+            )
+            .expect("corrupt");
+        }
+
+        let report = prune(&dir, Retain::Last(2), false, 0)
+            .expect("prune should never need to parse run content");
+        assert_eq!(report.removed, 2);
+        assert_eq!(report.kept, 2);
+
         let _ = fs::remove_dir_all(&dir);
     }
 
