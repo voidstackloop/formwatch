@@ -918,6 +918,68 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
     ))
 }
 
+/// Flags form controls that share a `name` attribute with something they
+/// shouldn't. Standard form encoding keeps only one value (or silently
+/// merges them in a way the server likely doesn't expect) for a repeated
+/// key — so two *different* pieces of information submitted under one
+/// name means one of them vanishes with no client-side signal at all.
+/// Not an accessibility issue (axe-core has no concept of submission
+/// semantics) and not covered by any other check.
+///
+/// Radios sharing a `name` is how mutual exclusion works, and a checkbox
+/// group commonly and legitimately shares one too — both are excluded.
+/// Only a collision involving anything else (two text fields, a text
+/// field colliding with a checkbox, ...) is a real defect in the form
+/// itself, so this is a `Fail`, not a heuristic-limit `Warn`.
+pub async fn check_duplicate_names(page: &Page) -> Result<CheckResult> {
+    let dupes: Vec<String> = page
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                const fields = f ? ({DEEP_QUERY_JS})(f, 'input[name], select[name], textarea[name]') : [];
+                const groups = new Map();
+                for (const el of fields) {{
+                    const name = el.getAttribute('name');
+                    if (!name) continue;
+                    const kind = (el.tagName === 'INPUT' ? el.type : el.tagName).toLowerCase();
+                    if (!groups.has(name)) groups.set(name, []);
+                    groups.get(name).push(kind);
+                }}
+                const dupes = [];
+                for (const [name, kinds] of groups) {{
+                    if (kinds.length < 2) continue;
+                    const allRadio = kinds.every((k) => k === 'radio');
+                    const allCheckbox = kinds.every((k) => k === 'checkbox');
+                    if (!allRadio && !allCheckbox) dupes.push(name);
+                }}
+                return dupes;
+            }})()"#
+        ))
+        .await?
+        .into_value()?;
+
+    let status = if dupes.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    Ok(result(
+        "Duplicate field names",
+        status,
+        if dupes.is_empty() {
+            "No form controls share a name attribute (outside legitimate radio/checkbox groups)."
+                .to_string()
+        } else {
+            format!(
+                "{} field name(s) shared by more than one non-radio/checkbox control — \
+                 submitting the form will silently drop at least one of these values: {}.",
+                dupes.len(),
+                dupes.join(", ")
+            )
+        },
+    ))
+}
+
 /// Detects a bot-protection/CAPTCHA challenge (reCAPTCHA, hCaptcha,
 /// Cloudflare Turnstile, or a generic "verify you're human" interstitial)
 /// on the page. Never a Fail: none of this is evidence the *form* is
@@ -1152,6 +1214,14 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
             check_timeout,
             capture,
             check_bot_protection(page),
+        )
+        .await,
+        run_safely(
+            page,
+            "Duplicate field names",
+            check_timeout,
+            capture,
+            check_duplicate_names(page),
         )
         .await,
         submission,

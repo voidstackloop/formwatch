@@ -89,6 +89,12 @@ your own use.
   fine — but without this check, a page stuck behind Cloudflare's "Just a
   moment..." interstitial just looks like "no `<form>` found," a real
   finding with the wrong explanation.
+- **Duplicate field names** — flags form controls that share a `name`
+  attribute with something other than a legitimate radio/checkbox group.
+  Standard form encoding keeps only one value (or silently merges them)
+  for a repeated key, so two different pieces of information submitted
+  under one name means one vanishes with no client-side signal at all —
+  not an accessibility issue, and not covered by any other check.
 
 ## Commands
 

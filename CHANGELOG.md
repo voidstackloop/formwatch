@@ -24,6 +24,15 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Added
 
+- A ninth check, **Duplicate field names**: flags form controls that
+  share a `name` attribute with something other than a legitimate
+  radio/checkbox group. Standard form encoding keeps only one value (or
+  silently merges them) for a repeated key, so two different pieces of
+  information submitted under one name means one vanishes with no
+  client-side signal at all — not an accessibility issue (axe-core has
+  no concept of submission semantics) and not covered by any other
+  check. Always a `Fail`: unlike Bot protection, this is a real defect
+  in the form itself.
 - **Optional LLM semantic checks** (`--llm` / `llm:` config): two
   provider-agnostic checks — "Error wording (LLM)" and
   "Instructions (LLM)" — that score the clarity of validation error

@@ -779,3 +779,38 @@ async fn llm_semantic_checks_run_against_a_page_with_the_mock_provider() {
         );
     }
 }
+
+#[tokio::test]
+async fn duplicate_name_between_two_text_fields_is_a_fail() {
+    // fixtures/duplicate-name-form.html has two unrelated text inputs
+    // both named "email" — on submit, standard form encoding keeps only
+    // one of the two values, with zero client-side signal that anything
+    // was lost. The fixture also has a legitimate radio group and a
+    // legitimate checkbox group sharing a name each; neither should be
+    // flagged, since that's how those groups are meant to work.
+    let (_browser, page, _handle) = open_fixture("duplicate-name-form.html").await;
+    let result = checks::check_duplicate_names(&page)
+        .await
+        .expect("check_duplicate_names");
+    assert_eq!(result.status, checks::Status::Fail, "got: {result:?}");
+    assert!(result.detail.contains("email"), "got: {}", result.detail);
+    assert!(
+        !result.detail.contains("contact"),
+        "a legitimate radio group must not be flagged, got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("interests"),
+        "a legitimate checkbox group must not be flagged, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn form_with_no_duplicate_names_passes() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_duplicate_names(&page)
+        .await
+        .expect("check_duplicate_names");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}

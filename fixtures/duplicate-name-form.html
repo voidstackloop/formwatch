@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Duplicate Field Names</title></head>
+<body>
+  <!-- Two unrelated text fields both named "email" — a realistic copy-
+       paste mistake. On submit, standard form encoding keeps only one
+       of the two values; the user has no way to know which one, or that
+       anything was lost at all.
+
+       Also includes a legitimate radio group and a legitimate checkbox
+       group sharing a name each — neither should be flagged, since that
+       is how HTML radio/checkbox groups are meant to work. -->
+  <form>
+    <label for="personal-email">Personal email</label>
+    <input id="personal-email" name="email" type="email">
+
+    <label for="work-email">Work email</label>
+    <input id="work-email" name="email" type="email">
+
+    <fieldset>
+      <legend>Preferred contact method</legend>
+      <label><input type="radio" name="contact" value="email"> Email</label>
+      <label><input type="radio" name="contact" value="phone"> Phone</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Interests</legend>
+      <label><input type="checkbox" name="interests" value="parks"> Parks</label>
+      <label><input type="checkbox" name="interests" value="roads"> Roads</label>
+    </fieldset>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
