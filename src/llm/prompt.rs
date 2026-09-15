@@ -96,20 +96,71 @@ fn strip_code_fence(raw: &str) -> &str {
 
 /// Parses a model reply into a [`Verdict`], tolerating prose around the
 /// JSON object. Returns `None` if no object with a valid `score` is found.
+///
+/// Every balanced `{...}` region is tried in order rather than taking the
+/// first `{` through the last `}`: prose such as `Use {} to denote X,
+/// then {"score": 4}` would otherwise be sliced into an unparseable
+/// span and a perfectly good verdict discarded.
 pub fn parse_verdict(raw: &str) -> Option<Verdict> {
     let cleaned = strip_code_fence(raw);
-    let start = cleaned.find('{')?;
-    let end = cleaned.rfind('}')?;
-    if end < start {
-        return None;
+    balanced_json_objects(cleaned)
+        .into_iter()
+        .find_map(verdict_from_object)
+}
+
+/// Every top-level `{...}` region in `s`, brace-balanced and ignoring
+/// braces that appear inside JSON string literals.
+fn balanced_json_objects(s: &str) -> Vec<&str> {
+    let mut objects = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in s.bytes().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    objects.push(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
     }
-    let value: serde_json::Value = serde_json::from_str(&cleaned[start..=end]).ok()?;
+    objects
+}
+
+/// Parses one JSON object into a [`Verdict`]. A missing or out-of-range
+/// score is a parse failure, not something to clamp: silently turning a
+/// nonsense (or model-injected) `"score": 99` into a passing 5 would let
+/// it decide the check. Returning `None` degrades the check to a `Warn`.
+fn verdict_from_object(object: &str) -> Option<Verdict> {
+    let value: serde_json::Value = serde_json::from_str(object).ok()?;
 
     let score = value.get("score").and_then(|s| {
         s.as_u64()
             .or_else(|| s.as_str().and_then(|t| t.trim().parse().ok()))
     })?;
-    let score = score.clamp(SCORE_MIN as u64, SCORE_MAX as u64) as u8;
+    if !(SCORE_MIN as u64..=SCORE_MAX as u64).contains(&score) {
+        return None;
+    }
 
     let issues = value
         .get("issues")
@@ -133,7 +184,7 @@ pub fn parse_verdict(raw: &str) -> Option<Verdict> {
         .to_string();
 
     Some(Verdict {
-        score,
+        score: score as u8,
         issues,
         summary,
     })
@@ -174,10 +225,21 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_numeric_string_score_and_clamps_it() {
+    fn accepts_a_numeric_string_score_and_rejects_out_of_range() {
         assert_eq!(parse_verdict(r#"{"score": "3"}"#).expect("str").score, 3);
-        assert_eq!(parse_verdict(r#"{"score": 99}"#).expect("high").score, 5);
-        assert_eq!(parse_verdict(r#"{"score": 0}"#).expect("low").score, 1);
+        // Out of range is a parse failure (the check degrades to Warn),
+        // not a clamp to a passing 5.
+        assert!(parse_verdict(r#"{"score": 99}"#).is_none());
+        assert!(parse_verdict(r#"{"score": 0}"#).is_none());
+    }
+
+    #[test]
+    fn finds_the_verdict_object_even_with_braces_in_surrounding_prose() {
+        // `find('{')`/`rfind('}')` used to slice from the `{}` in the
+        // prose all the way to the real object's close: unparseable, so a
+        // valid verdict was thrown away.
+        let reply = "Use {} to denote a set. My verdict:\n{\"score\": 4}\nDone.";
+        assert_eq!(parse_verdict(reply).expect("parse").score, 4);
     }
 
     #[test]

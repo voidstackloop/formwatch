@@ -10,12 +10,15 @@ use std::path::PathBuf;
 
 use crate::llm::prompt::Verdict;
 
-/// A stable hex key for the given inputs. Order-sensitive.
-pub fn cache_key(provider: &str, model: &str, check: &str, text: &str) -> String {
+/// A stable hex key for the given inputs. Order-sensitive. The base URL is
+/// part of the key: two different OpenAI-compatible endpoints can share a
+/// provider label and model string, and a verdict produced by one must not
+/// be served for the other.
+pub fn cache_key(provider: &str, base_url: &str, model: &str, check: &str, text: &str) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;
-    for field in [provider, model, check, text] {
+    for field in [provider, base_url, model, check, text] {
         for byte in field.as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(PRIME);
@@ -77,17 +80,28 @@ mod tests {
     #[test]
     fn key_is_deterministic_and_field_sensitive() {
         assert_eq!(
-            cache_key("openai", "m", "check", "text"),
-            cache_key("openai", "m", "check", "text")
+            cache_key("openai", "https://api.openai.com/v1", "m", "check", "text"),
+            cache_key("openai", "https://api.openai.com/v1", "m", "check", "text")
         );
         assert_ne!(
-            cache_key("openai", "m", "check", "text"),
-            cache_key("openai", "m", "check", "other")
+            cache_key("openai", "https://api.openai.com/v1", "m", "check", "text"),
+            cache_key("openai", "https://api.openai.com/v1", "m", "check", "other")
+        );
+        // Different endpoint, same provider/model: must not share a verdict.
+        assert_ne!(
+            cache_key("openai", "https://api.openai.com/v1", "m", "check", "text"),
+            cache_key(
+                "openai",
+                "https://internal.example/v1",
+                "m",
+                "check",
+                "text"
+            )
         );
         // Field-boundary sensitivity: concatenation must not collide.
         assert_ne!(
-            cache_key("openai", "m", "ab", "c"),
-            cache_key("openai", "m", "a", "bc")
+            cache_key("openai", "u", "m", "ab", "c"),
+            cache_key("openai", "u", "m", "a", "bc")
         );
     }
 

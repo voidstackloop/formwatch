@@ -17,9 +17,9 @@ use std::str::FromStr;
 #[serde(try_from = "String", into = "String")]
 pub struct Shard {
     /// 1-based shard number.
-    pub index: usize,
+    index: usize,
     /// Total number of shards.
-    pub total: usize,
+    total: usize,
 }
 
 impl Shard {
@@ -45,7 +45,11 @@ impl Shard {
         items
             .into_iter()
             .enumerate()
-            .filter(|(i, _)| i % self.total == self.index - 1)
+            // `index` is 1-based and validated by `new`; `saturating_sub`
+            // is pure defense-in-depth against a hand-built value
+            // underflowing (and in release, wrapping so every form is
+            // silently skipped).
+            .filter(|(i, _)| i % self.total == self.index.saturating_sub(1))
             .map(|(_, item)| item)
             .collect()
     }

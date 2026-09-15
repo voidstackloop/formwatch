@@ -64,7 +64,7 @@ project doesn't have a release yet, so everything below is grouped under
 - `test` and `monitor` accept `--junit` / `--sarif` (with `--out`), so a
   single CI job can run the checks and emit results in one step.
 - `report --prometheus` renders Prometheus text-exposition metrics
-  (`formwatch_forms_total`, `formwatch_checks_failing`,
+  (`formwatch_forms`, `formwatch_checks_failing`,
   `formwatch_checks_warning`, `formwatch_check_last_run_timestamp_seconds`,
   and per-check `formwatch_check_status`) for a scrape endpoint or a
   node_exporter textfile-collector directory.
@@ -188,6 +188,49 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Fixed
 
+- Validation reported a false `FAIL` for a correctly-described field whose
+  `aria-describedby` (or `aria-errormessage`) listed more than one id: the
+  check resolved the whole space-separated list with a single
+  `getElementById`, which returns null for a list. Each id is now
+  resolved, and either attribute counts as a described field.
+- LLM verdict parsing clamped an out-of-range score up to a passing 5,
+  contradicting the module's own contract that an out-of-range score is a
+  parse failure and letting a model-injected `{"score": 99}` force a
+  `Pass`. It is now rejected (the check degrades to `Warn`), and verdict
+  extraction is brace-balanced, so prose containing `{}` no longer
+  discards a valid verdict.
+- LLM retries now apply to 429/5xx responses whose body isn't JSON
+  (routine for gateway/proxy errors): the status is checked before the
+  body is parsed, instead of the failed parse turning a retryable status
+  into a permanent failure.
+- LLM `Retry-After` is honored up to its documented 60s cap instead of
+  being silently re-capped to 8s. `LlmOptions`' hand-written `Debug`
+  redacts the API key; the verdict cache key includes the resolved base
+  URL (so switching `--llm-base-url` no longer serves the previous
+  backend's verdicts); and the Anthropic response parser finds the first
+  `text` content block rather than assuming the first block is text.
+- `serve`'s `/readyz` reported ready for an existing but read-only history
+  directory — `create_dir_all` returns `Ok` for any existing directory —
+  so it now probes writability, and the server bounds concurrent
+  connections and caps header-read time.
+- `formwatch baseline --write` (`Baseline::from_runs`) recorded the
+  *first* status seen for a repeated URL instead of the newest.
+- `formwatch doctor` probed the audit log's parent directory rather than
+  an existing (possibly read-only) log file, so it could report writable
+  while every append failed.
+- `--per-host-delay-ms` collapsed every IPv6 literal onto one pacing
+  bucket: `host_of` split `[::1]:8080` on `:` and returned `"["`.
+- `--check-timeout-secs` (via the wizard timeout) and the Chrome-open
+  retry backoff could panic on overflow; both saturate now.
+- Webhook auto-detection treated any URL *containing* `hooks.slack.com`
+  (even in a query string or a look-alike host) as a Slack webhook; it
+  now matches the host exactly.
+- `report --prometheus`'s `formwatch_forms_total` was a gauge carrying the
+  reserved counter `_total` suffix, which `promtool` rejects; renamed to
+  `formwatch_forms`.
+- JUnit XML output also drops the XML-1.0-forbidden U+FFFE/U+FFFF
+  characters, and history loads same-second runs in a stable filename
+  order so "the previous run" can't vary between invocations.
 - The declared MSRV was wrong: the code (edition-2024 let-chains) and
   several transitive dependencies (`home`, `icu_*` need 1.88;
   `idna_adapter` needs 1.86) require Rust **1.88**, not 1.85, so the MSRV

@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Everything needed to run the semantic checks.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LlmOptions {
     /// Whether the checks run at all.
     pub enabled: bool,
@@ -69,6 +69,29 @@ pub struct LlmOptions {
     pub cache: bool,
     /// Cache directory override.
     pub cache_dir: Option<PathBuf>,
+}
+
+/// Hand-written so the API key can never be printed by a `{:?}` (a debug
+/// log line, an error context, a panic message). The derive would have
+/// exposed it verbatim.
+impl std::fmt::Debug for LlmOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmOptions")
+            .field("enabled", &self.enabled)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .field("max_input_chars", &self.max_input_chars)
+            .field("threshold", &self.threshold)
+            .field("fail", &self.fail)
+            .field("redact", &self.redact)
+            .field("cache", &self.cache)
+            .field("cache_dir", &self.cache_dir)
+            .finish()
+    }
 }
 
 impl Default for LlmOptions {
@@ -212,14 +235,19 @@ impl LlmClient {
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .and_then(parse_retry_after);
-        let body: serde_json::Value = response
-            .json()
+        // Read the body as text *before* branching on status: an error
+        // response (429/5xx) very often carries an HTML or plain-text body
+        // from a gateway or proxy, and parsing that as JSON first turned a
+        // perfectly retryable status into a permanent "non-JSON body"
+        // failure — so the documented retry on 429/5xx never happened.
+        let raw = response
+            .text()
             .await
-            .map_err(|e| LlmFailure::permanent(format!("provider returned non-JSON body: {e}")))?;
+            .map_err(|e| LlmFailure::retryable(format!("reading provider response failed: {e}")))?;
         if !status.is_success() {
             let message = format!(
                 "provider returned HTTP {status}: {}",
-                truncate_chars(&body.to_string(), 200)
+                truncate_chars(&raw, 200)
             );
             return Err(if status_is_retryable(status.as_u16()) {
                 LlmFailure {
@@ -231,6 +259,8 @@ impl LlmClient {
                 LlmFailure::permanent(message)
             });
         }
+        let body: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| LlmFailure::permanent(format!("provider returned non-JSON body: {e}")))?;
         if let Some(tokens) = parse_usage(self.options.provider, &body) {
             tracing::debug!(
                 provider = self.options.provider.label(),
@@ -248,6 +278,7 @@ impl LlmClient {
     pub async fn judge(&self, check: &str, system: &str, user: &str) -> Result<Verdict> {
         let key = cache::cache_key(
             self.options.provider.label(),
+            &self.options.resolved_base_url(),
             &self.options.model,
             check,
             user,
@@ -310,13 +341,14 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
         .map(|secs| Duration::from_secs(secs.min(60)))
 }
 
-/// Backoff before the next attempt: the server's `Retry-After` when given,
-/// otherwise 500ms, 1s, 2s, ... capped at 8s.
+/// Backoff before the next attempt: the server's `Retry-After` when given
+/// (already capped to 60s by [`parse_retry_after`]), otherwise 500ms, 1s,
+/// 2s, ... capped at 8s.
 fn retry_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
     const BASE_MS: u64 = 500;
     const CAP: Duration = Duration::from_secs(8);
     if let Some(after) = retry_after {
-        return after.min(CAP);
+        return after;
     }
     Duration::from_millis(BASE_MS.saturating_mul(2u64.saturating_pow(attempt))).min(CAP)
 }

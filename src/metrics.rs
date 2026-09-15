@@ -39,9 +39,9 @@ fn status_code(status: Status) -> u8 {
 pub fn render(runs: &[RunResult]) -> String {
     let mut out = String::new();
 
-    out.push_str("# HELP formwatch_forms_total Number of forms with a recorded run.\n");
-    out.push_str("# TYPE formwatch_forms_total gauge\n");
-    out.push_str(&format!("formwatch_forms_total {}\n", runs.len()));
+    out.push_str("# HELP formwatch_forms Number of forms with a recorded run.\n");
+    out.push_str("# TYPE formwatch_forms gauge\n");
+    out.push_str(&format!("formwatch_forms {}\n", runs.len()));
 
     out.push_str(
         "# HELP formwatch_checks_failing Number of FAIL checks in the form's latest run.\n",
@@ -141,8 +141,8 @@ mod tests {
     #[test]
     fn renders_help_type_and_expected_series() {
         let text = render(&[run()]);
-        assert!(text.contains("# TYPE formwatch_forms_total gauge"));
-        assert!(text.contains("formwatch_forms_total 1"));
+        assert!(text.contains("# TYPE formwatch_forms gauge"));
+        assert!(text.contains("formwatch_forms 1"));
         assert!(text.contains("formwatch_checks_failing{") && text.contains("} 1"));
         assert!(text.contains("formwatch_checks_warning{") && text.contains("} 1"));
         assert!(text.contains("formwatch_check_last_run_timestamp_seconds{"));
@@ -169,6 +169,6 @@ mod tests {
     #[test]
     fn empty_input_still_emits_the_form_count() {
         let text = render(&[]);
-        assert!(text.contains("formwatch_forms_total 0"));
+        assert!(text.contains("formwatch_forms 0"));
     }
 }

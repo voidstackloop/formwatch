@@ -26,7 +26,10 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 const PROMETHEUS: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -46,7 +49,7 @@ fn route(method: &Method, path: &str, history_dir: &Path) -> (StatusCode, &'stat
     }
     match path {
         "/healthz" => (StatusCode::OK, TEXT, "ok\n".into()),
-        "/readyz" => match std::fs::create_dir_all(history_dir) {
+        "/readyz" => match readiness(history_dir) {
             Ok(()) => (StatusCode::OK, TEXT, "ok\n".into()),
             Err(e) => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -82,6 +85,18 @@ fn route(method: &Method, path: &str, history_dir: &Path) -> (StatusCode, &'stat
     }
 }
 
+/// Readiness probe. `create_dir_all` alone is not enough: it returns `Ok`
+/// for an existing directory that is *not writable*, so `/readyz` used to
+/// report ready for exactly the misconfiguration it claims to catch.
+/// Writing (and removing) a probe file actually exercises writability.
+fn readiness(history_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(history_dir)?;
+    let probe = history_dir.join(".formwatch-readyz-probe");
+    std::fs::write(&probe, b"ok")?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 async fn handle(
     req: Request<Incoming>,
     history_dir: PathBuf,
@@ -110,6 +125,12 @@ pub async fn run(history_dir: PathBuf, addr: SocketAddr) -> Result<()> {
     println!("formwatch serving (read-only) on http://{local}");
     println!("  /healthz  /readyz  /metrics  /api/forms");
 
+    // Bound concurrent connections and the time a client may take to send
+    // its headers, so a slow or malicious client can't exhaust the process
+    // with unbounded half-open connections.
+    const MAX_CONNECTIONS: usize = 64;
+    let limit = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -120,12 +141,21 @@ pub async fn run(history_dir: PathBuf, addr: SocketAddr) -> Result<()> {
                         continue;
                     }
                 };
+                let permit = match limit.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        tracing::warn!(%peer, "connection limit reached; refusing connection");
+                        continue;
+                    }
+                };
                 let history_dir = history_dir.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     let io = TokioIo::new(stream);
                     let service = service_fn(move |req| handle(req, history_dir.clone()));
                     if let Err(e) =
                         hyper::server::conn::http1::Builder::new()
+                            .header_read_timeout(Duration::from_secs(10))
                             .serve_connection(io, service)
                             .await
                     {
@@ -147,7 +177,6 @@ mod tests {
     use super::*;
     use crate::checks::{CheckResult, Status};
     use crate::history::{RunResult, SCHEMA_VERSION};
-
     fn seeded_history(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("formwatch-test-serve-{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -182,12 +211,26 @@ mod tests {
     }
 
     #[test]
+    fn readiness_fails_when_the_history_path_is_not_a_usable_directory() {
+        let base = std::env::temp_dir().join("formwatch-test-serve-readyz-file");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("mkdir");
+        // A plain file where the history dir should be: create_dir_all
+        // fails, so readiness must report 503.
+        let file = base.join("history");
+        std::fs::write(&file, b"x").expect("write file");
+        let (status, _, _) = route(&Method::GET, "/readyz", &file);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn metrics_endpoint_renders_prometheus() {
         let dir = seeded_history("metrics");
         let (status, content_type, body) = route(&Method::GET, "/metrics", &dir);
         assert_eq!(status, StatusCode::OK);
         assert!(content_type.contains("version=0.0.4"));
-        assert!(body.contains("formwatch_forms_total 1"), "{body}");
+        assert!(body.contains("formwatch_forms 1"), "{body}");
         assert!(body.contains("formwatch_check_status{"));
         let _ = std::fs::remove_dir_all(&dir);
     }

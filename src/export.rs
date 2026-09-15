@@ -23,6 +23,8 @@ fn xml_escape(s: &str) -> String {
             // XML 1.0 forbids most control characters outright; drop them
             // rather than emit a document no parser will accept.
             c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {}
+            // U+FFFE/U+FFFF are also forbidden in XML 1.0.
+            '\u{FFFE}' | '\u{FFFF}' => {}
             other => out.push(other),
         }
     }

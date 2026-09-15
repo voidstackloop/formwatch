@@ -74,11 +74,16 @@ pub fn regressions_from_history(history_dir: &Path, runs: &[RunResult]) -> Resul
     Ok(regressions)
 }
 
-/// Whether a webhook URL looks like a Slack incoming webhook (which
-/// wants a `{ "text": ... }` body) rather than a generic webhook (which
-/// gets the structured payload).
+/// Whether a webhook URL is a Slack incoming webhook (which wants a
+/// `{ "text": ... }` body) rather than a generic webhook (which gets the
+/// structured payload). Matches the *host* exactly — a substring test
+/// would misclassify `https://example.com/?x=hooks.slack.com` and send it
+/// a Slack-shaped payload.
 pub fn is_slack_webhook(url: &str) -> bool {
-    url.contains("hooks.slack.com") || url.contains("hooks.slack-gov.com")
+    matches!(
+        crate::limiter::host_of(url).as_deref(),
+        Some("hooks.slack.com") | Some("hooks.slack-gov.com")
+    )
 }
 
 /// The human-readable summary shared by both payload shapes.
@@ -185,5 +190,15 @@ mod tests {
         let generic = payload_for("https://example.com/hook", &regs, 1);
         assert_eq!(generic["source"], "formwatch");
         assert_eq!(generic["regressions"][0]["to"], "FAIL");
+    }
+
+    #[test]
+    fn a_url_merely_mentioning_slack_is_not_treated_as_slack() {
+        assert!(is_slack_webhook("https://hooks.slack.com/services/x"));
+        assert!(is_slack_webhook("https://hooks.slack-gov.com/services/x"));
+        assert!(!is_slack_webhook(
+            "https://example.com/?next=hooks.slack.com"
+        ));
+        assert!(!is_slack_webhook("https://hooks.slack.com.evil.test/x"));
     }
 }

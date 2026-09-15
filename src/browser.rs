@@ -259,7 +259,10 @@ pub async fn open_with(browser: &Browser, url: &str, opts: &OpenOptions) -> Resu
             }
         }
         if attempt + 1 < attempts {
-            tokio::time::sleep(opts.backoff * 2u32.pow(attempt)).await;
+            // Saturating: `attempts` is a public field, and a large value
+            // would otherwise overflow `backoff * 2^n` and panic.
+            let backoff = opts.backoff.saturating_mul(2u32.saturating_pow(attempt));
+            tokio::time::sleep(backoff).await;
         }
     }
     Err(last_err.expect("loop runs at least once, always setting last_err on failure"))

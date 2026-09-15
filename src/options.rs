@@ -44,7 +44,9 @@ impl RunOptions {
     /// wizard gets a multiple of the base check timeout (3x, preserving
     /// the original 20s base -> 60s wizard relationship).
     pub fn wizard_timeout(&self) -> Duration {
-        self.check_timeout * 3
+        // `Duration * u32` panics on overflow; a huge `--check-timeout-secs`
+        // must saturate, not take down the process.
+        self.check_timeout.saturating_mul(3)
     }
 
     /// The ceiling for the input-persistence check: its own user-requested
@@ -76,5 +78,16 @@ mod tests {
         };
         assert_eq!(opts.wizard_timeout(), Duration::from_secs(60));
         assert_eq!(opts.persistence_timeout(), Duration::from_secs(50));
+    }
+
+    #[test]
+    fn an_enormous_timeout_saturates_instead_of_panicking() {
+        let opts = RunOptions {
+            check_timeout: Duration::from_secs(u64::MAX),
+            ..RunOptions::default()
+        };
+        // Must not panic; the exact saturated value is not important.
+        let _ = opts.wizard_timeout();
+        let _ = opts.persistence_timeout();
     }
 }

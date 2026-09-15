@@ -94,12 +94,23 @@ pub fn run(ctx: &Context) -> Vec<Check> {
 
     match ctx.audit_log {
         Some(path) => {
-            let parent: PathBuf = path
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            match write_probe(&parent) {
+            // If the log file already exists, probe *it*: its parent can
+            // be writable while the file itself is read-only, in which case
+            // every later audit::append would fail despite a green doctor.
+            let probe = if path.exists() {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .map(|_| ())
+            } else {
+                let parent: PathBuf = path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                write_probe(&parent)
+            };
+            match probe {
                 Ok(()) => checks.push(check(
                     "Audit log",
                     true,

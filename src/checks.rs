@@ -729,11 +729,18 @@ pub async fn check_validation_errors(page: &Page) -> Result<CheckResult> {
                 const f = {TARGET_FORM_JS};
                 if (!f) return 0;
                 const invalid = ({DEEP_QUERY_JS})(f, 'input:invalid, select:invalid, textarea:invalid, [aria-invalid=true]');
+                const idsOf = (el, attr) => (el.getAttribute(attr) || '').split(/\\s+/).filter(Boolean);
+                const hasText = (id) => (document.getElementById(id)?.textContent || '').trim().length > 0;
                 let unlabeled = 0;
                 for (const el of invalid) {{
-                    const describedBy = el.getAttribute('aria-describedby');
-                    const hasDescribedText = describedBy && document.getElementById(describedBy)?.textContent.trim();
-                    if (!hasDescribedText) unlabeled += 1;
+                    // aria-describedby (and aria-errormessage) hold a
+                    // *space-separated list* of ids; getElementById on the
+                    // whole attribute value returns null for a multi-id
+                    // list, which used to count a correctly-described field
+                    // as failed.
+                    const described = idsOf(el, 'aria-describedby').some(hasText)
+                        || idsOf(el, 'aria-errormessage').some(hasText);
+                    if (!described) unlabeled += 1;
                 }}
                 return unlabeled;
             }})()"#

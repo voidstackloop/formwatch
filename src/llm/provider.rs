@@ -160,9 +160,13 @@ pub fn parse_response(provider: Provider, body: &serde_json::Value) -> Option<St
         Provider::Anthropic => body
             .get("content")?
             .as_array()?
-            .first()?
-            .get("text")?
-            .as_str()
+            .iter()
+            // The first block is not necessarily text — a "thinking" or
+            // tool-use block can precede it — so scan for the text block
+            // rather than assuming position 0.
+            .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("text"))
+            .and_then(|block| block.get("text"))
+            .and_then(|t| t.as_str())
             .map(str::to_string),
         Provider::Mock => None,
     }
@@ -258,6 +262,18 @@ mod tests {
         assert_eq!(
             parse_response(Provider::Anthropic, &anthropic).as_deref(),
             Some("hi there")
+        );
+
+        // A leading non-text block must not hide the text block.
+        let thinking_first = serde_json::json!({
+            "content": [
+                { "type": "thinking", "thinking": "..." },
+                { "type": "text", "text": "the answer" }
+            ]
+        });
+        assert_eq!(
+            parse_response(Provider::Anthropic, &thinking_first).as_deref(),
+            Some("the answer")
         );
 
         assert!(parse_response(Provider::OpenAi, &serde_json::json!({})).is_none());

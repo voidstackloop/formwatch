@@ -94,22 +94,32 @@ pub fn save_run(base: &Path, run: &RunResult) -> Result<PathBuf> {
 }
 
 /// All runs for this URL, oldest first.
+///
+/// Within a single timestamp, ordering is by filename — `save_run` writes
+/// same-second runs as `<ts>-N.json`, and without that tiebreak the
+/// `read_dir` order is arbitrary, so "the previous run" (and therefore the
+/// diff, streaks, and flakiness) could flip from run to run.
 pub fn load_runs(base: &Path, url: &str) -> Result<Vec<RunResult>> {
     let dir = dir_for(base, url);
     if !dir.exists() {
         return Ok(vec![]);
     }
-    let mut runs = vec![];
+    let mut runs: Vec<(String, RunResult)> = vec![];
     for entry in fs::read_dir(&dir)? {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
             let run: RunResult = serde_json::from_str(&fs::read_to_string(&path)?)
                 .with_context(|| format!("parsing {}", path.display()))?;
-            runs.push(run);
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            runs.push((file, run));
         }
     }
-    runs.sort_by_key(|r| r.timestamp);
-    Ok(runs)
+    runs.sort_by(|a, b| (a.1.timestamp, &a.0).cmp(&(b.1.timestamp, &b.0)));
+    Ok(runs.into_iter().map(|(_, run)| run).collect())
 }
 
 /// Every URL formwatch has ever recorded a run for, newest run first.

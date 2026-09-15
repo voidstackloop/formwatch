@@ -71,8 +71,15 @@ pub fn host_of(url: &str) -> Option<String> {
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or(authority);
-    // Strip userinfo already handled; strip a trailing `:port`.
-    let host = authority.split(':').next().unwrap_or("").trim();
+    // Strip a trailing `:port`. An IPv6 literal is bracketed
+    // (`[::1]:8080`), so splitting on ':' would yield "[" for every one
+    // of them and collapse all IPv6 hosts onto a single pacing bucket.
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.trim();
     if host.is_empty() {
         None
     } else {
@@ -101,6 +108,20 @@ mod tests {
         assert_eq!(host_of("city.gov/a"), Some("city.gov".to_string()));
         assert_eq!(host_of("file:///tmp/x.html"), None);
         assert_eq!(host_of(""), None);
+    }
+
+    #[test]
+    fn ipv6_literals_are_distinct_hosts_not_the_bracket() {
+        assert_eq!(host_of("http://[::1]:8080/x"), Some("::1".to_string()));
+        assert_eq!(
+            host_of("http://[2001:db8::1]/x"),
+            Some("2001:db8::1".to_string())
+        );
+        assert_ne!(
+            host_of("http://[::1]/x"),
+            host_of("http://[::2]/y"),
+            "distinct IPv6 hosts must not collapse onto one pacer key"
+        );
     }
 
     #[tokio::test]

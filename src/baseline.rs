@@ -72,26 +72,36 @@ impl Baseline {
     }
 
     /// Builds a baseline from the latest run of every known form, keeping
-    /// every non-Pass check.
+    /// every non-Pass check. When `runs` happens to hold more than one run
+    /// for a URL, the newest one wins for each (url, check) — keeping the
+    /// older would record a stale severity that could then absorb (or, if
+    /// more severe, wrongly uphold) a later finding.
     pub fn from_runs(runs: &[RunResult]) -> Self {
-        let mut entries: Vec<Entry> = runs
-            .iter()
-            .flat_map(|run| {
-                run.checks
-                    .iter()
-                    .filter(|c| c.status != Status::Pass)
-                    .map(|c| Entry {
-                        url: run.url.clone(),
-                        name: run.name.clone(),
-                        check: c.name.clone(),
-                        status: c.status,
-                    })
-            })
-            .collect();
+        let mut latest: std::collections::HashMap<(&str, &str), (i64, Entry)> =
+            std::collections::HashMap::new();
+        for run in runs {
+            for c in run.checks.iter().filter(|c| c.status != Status::Pass) {
+                let key = (run.url.as_str(), c.name.as_str());
+                if latest.get(&key).is_none_or(|(ts, _)| run.timestamp >= *ts) {
+                    latest.insert(
+                        key,
+                        (
+                            run.timestamp,
+                            Entry {
+                                url: run.url.clone(),
+                                name: run.name.clone(),
+                                check: c.name.clone(),
+                                status: c.status,
+                            },
+                        ),
+                    );
+                }
+            }
+        }
+        let mut entries: Vec<Entry> = latest.into_values().map(|(_, entry)| entry).collect();
         entries.sort_by(|a, b| {
             (a.url.as_str(), a.check.as_str()).cmp(&(b.url.as_str(), b.check.as_str()))
         });
-        entries.dedup_by(|a, b| a.url == b.url && a.check == b.check);
         Self {
             schema_version: BASELINE_SCHEMA_VERSION,
             generated_at: chrono::Utc::now().timestamp(),
@@ -256,6 +266,31 @@ mod tests {
                 .entries
                 .iter()
                 .any(|e| e.check == "Mobile usability")
+        );
+    }
+
+    #[test]
+    fn from_runs_keeps_the_newest_status_for_a_repeated_url() {
+        let older = RunResult {
+            schema_version: SCHEMA_VERSION,
+            name: "x".into(),
+            url: "https://a.gov".into(),
+            timestamp: 1,
+            checks: vec![check("Accessibility", Status::Fail)],
+        };
+        let newer = RunResult {
+            schema_version: SCHEMA_VERSION,
+            name: "x".into(),
+            url: "https://a.gov".into(),
+            timestamp: 2,
+            checks: vec![check("Accessibility", Status::Warn)],
+        };
+        let baseline = Baseline::from_runs(&[older, newer]);
+        assert_eq!(baseline.len(), 1);
+        assert_eq!(
+            baseline.entries[0].status,
+            Status::Warn,
+            "the newest run's status must win, not the first one seen"
         );
     }
 
