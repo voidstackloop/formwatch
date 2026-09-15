@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Benchmark formwatch against the bundled demo site.
 #
-#   scripts/benchmark.sh            # 5 timed runs, default port/wait
+#   scripts/benchmark.sh                        # 5 timed runs, default port/wait
 #   RUNS=10 WAIT=0 PORT=9001 scripts/benchmark.sh
+#   MAX_CONCURRENT=1 scripts/benchmark.sh        # sweep concurrency
+#   NO_SCREENSHOTS=1 scripts/benchmark.sh        # isolate screenshot cost
 #
 # Starts `formwatch demo` on localhost, then repeatedly runs `monitor` over
 # every demo form and reports wall-clock timings. Everything is local, so
@@ -15,9 +17,16 @@ cd "$(dirname "$0")/.."
 PORT="${PORT:-8099}"
 RUNS="${RUNS:-5}"
 WAIT="${WAIT:-1}"
+MAX_CONCURRENT="${MAX_CONCURRENT:-4}"
+NO_SCREENSHOTS="${NO_SCREENSHOTS:-0}"
 ADDR="127.0.0.1:${PORT}"
 BIN="./target/release/formwatch"
 HIST="$(mktemp -d)/history"
+
+SCREENSHOT_FLAG=()
+if [ "$NO_SCREENSHOTS" = "1" ]; then
+    SCREENSHOT_FLAG=(--no-screenshots)
+fi
 
 echo "building release binary…" >&2
 cargo build --release -q
@@ -33,7 +42,8 @@ done
 
 run_once() {
     "$BIN" --history-dir "$HIST" monitor demo-sites/forms.yml \
-        --wait "$WAIT" --max-concurrent 4 --json >/tmp/formwatch-bench.json 2>/dev/null || true
+        --wait "$WAIT" --max-concurrent "$MAX_CONCURRENT" "${SCREENSHOT_FLAG[@]}" --json \
+        >/tmp/formwatch-bench.json 2>/dev/null || true
 }
 
 run_once  # warm-up (Chrome launch, page cache)
@@ -56,7 +66,12 @@ median=$(awk -v n="$RUNS" 'NR == int((n + 1) / 2) { print; exit }' /tmp/formwatc
 forms_per_min=$(awk -v f="$forms" -v m="$median" 'BEGIN { printf "%.1f", (f / m) * 60 }')
 checks_per_sec=$(awk -v c="$checks" -v m="$median" 'BEGIN { printf "%.1f", c / m }')
 
+screenshots_label="on"
+if [ "$NO_SCREENSHOTS" = "1" ]; then
+    screenshots_label="off"
+fi
+
 echo
-echo "| Forms | Checks/run | Runs | Wait | min (s) | median (s) | max (s) | forms/min | checks/s |"
-echo "|------:|-----------:|-----:|-----:|--------:|-----------:|--------:|----------:|---------:|"
-echo "| $forms | $checks | $RUNS | ${WAIT}s | $min | $median | $max | $forms_per_min | $checks_per_sec |"
+echo "| Forms | Checks/run | Runs | Wait | Concurrency | Screenshots | min (s) | median (s) | max (s) | forms/min | checks/s |"
+echo "|------:|-----------:|-----:|-----:|------------:|:------------|--------:|-----------:|--------:|----------:|---------:|"
+echo "| $forms | $checks | $RUNS | ${WAIT}s | $MAX_CONCURRENT | $screenshots_label | $min | $median | $max | $forms_per_min | $checks_per_sec |"

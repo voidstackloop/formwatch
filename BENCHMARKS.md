@@ -9,17 +9,21 @@ a clean baseline plus a page for every check and known edge case — and
 `monitor demo-sites/forms.yml` checks all of them.
 
 Because everything is served from `127.0.0.1`, there's no network latency in
-these numbers — what's left is browser launch, the eight built-in checks per
+these numbers — what's left is browser launch, the eleven built-in checks per
 form, screenshot capture, and report writing.
 
 ## Latest results
 
-Measured with `RUNS=5 WAIT=1 scripts/benchmark.sh` (median of 5 runs, after
-one warm-up run):
+Measured with `scripts/benchmark.sh` (median of the given number of runs,
+after one warm-up run), sweeping the two knobs the "Reading the numbers"
+section below used to only assert about:
 
-| Forms | Checks/run | Runs | `--wait` | min (s) | median (s) | max (s) | forms/min | checks/s |
-|------:|-----------:|-----:|---------:|--------:|-----------:|--------:|----------:|---------:|
-| 35 | 280 | 5 | 1s | 12.93 | 12.96 | 13.19 | 162.0 | 21.6 |
+| Forms | Checks/run | Runs | `--wait` | Concurrency | Screenshots | min (s) | median (s) | max (s) | forms/min | checks/s |
+|------:|-----------:|-----:|---------:|------------:|:------------|--------:|-----------:|--------:|----------:|---------:|
+| 35 | 385 | 5 | 1s | 4 (default) | on | 12.78 | 13.36 | 13.59 | 157.2 | 28.8 |
+| 35 | 385 | 5 | 1s | 4 (default) | off | 12.03 | 12.61 | 12.93 | 166.5 | 30.5 |
+| 35 | 385 | 5 | 1s | 1 | on | 47.21 | 47.44 | 47.66 | 44.3 | 8.1 |
+| 35 | 385 | 3 | 1s | 8 | on | 7.87 | 8.05 | 8.12 | 260.9 | 47.8 |
 
 The 35 demo forms cover a clean baseline, a failing page for most checks, a
 three-step wizard and its slow/keyup/icon-only variants, shadow-DOM and
@@ -34,13 +38,14 @@ realistic mix, not 35 trivial pages.
 - OS: Ubuntu on WSL2
 - Chromium (`~/.cache/formwatch/chrome`): 107.0.5296.0
 - Rust: 1.98.1
-- `--max-concurrent 4` (the default)
 
 ## Reproduce
 
 ```
-scripts/benchmark.sh                 # 5 runs, --wait 1
-RUNS=10 WAIT=0 scripts/benchmark.sh  # more runs, no idle wait
+scripts/benchmark.sh                          # 5 runs, --wait 1, --max-concurrent 4
+RUNS=10 WAIT=0 scripts/benchmark.sh           # more runs, no idle wait
+MAX_CONCURRENT=1 scripts/benchmark.sh         # sweep concurrency
+NO_SCREENSHOTS=1 scripts/benchmark.sh         # isolate screenshot cost
 PORT=9001 WAIT=3 scripts/benchmark.sh
 ```
 
@@ -54,12 +59,18 @@ Everything is local; it never contacts a third-party site.
   `--wait` seconds (1s here; the default is 5s). That is deliberate idle
   time, not overhead — set `WAIT=0` to see the floor. Real `monitor` runs
   against remote forms add page-load time on top.
-- **Concurrency matters more than raw speed.** `--max-concurrent` (default
-  4) multiplies throughput on multi-core machines at the cost of running
-  more browsers at once; the per-host pacer (`--per-host-delay-ms`) is the
-  polite counterweight.
-- **Screenshots cost something.** Every non-Pass check captures a full-page
-  PNG; `--no-screenshots` trades evidence for speed.
+- **Concurrency matters far more than raw speed.** Going from
+  `--max-concurrent 1` to the default `4` cut the median from 47.4s to
+  13.4s on this 16-thread machine — a ~3.5x speedup from running more
+  browsers at once, not from anything getting individually faster.
+  `--max-concurrent 8` cut it further to 8.1s, though gains taper as
+  contention for CPU/Chrome processes grows; the per-host pacer
+  (`--per-host-delay-ms`) is the polite counterweight when checking a real,
+  shared third-party host rather than a local demo server.
+- **Screenshots cost something, but modestly**: 13.4s with screenshots vs.
+  12.6s with `--no-screenshots` on this same demo mix — about 6%, worth
+  knowing but not the dominant cost. Every non-Pass check captures a
+  full-page PNG; `--no-screenshots` trades that evidence for the difference.
 - **A failing page is slower than a passing one** (screenshots plus the
   extra validation work), which is why the demo mix matters.
 
