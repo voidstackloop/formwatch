@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Required Indicator Mismatch</title></head>
+<body>
+  <!-- "Full name *" looks required to any user, but the required
+       attribute was never wired up — native validation and screen
+       readers both treat it as optional. "Email *" is the correctly-
+       wired case (same visual promise, backed by the real attribute),
+       proving the check doesn't false-positive on a form that got it
+       right. "Comments" has no required-looking label and no
+       required attribute — irrelevant, should not be flagged either. -->
+  <form>
+    <label for="fullname">Full name *</label>
+    <input id="fullname" name="fullname" type="text">
+
+    <label for="email">Email *</label>
+    <input id="email" name="email" type="email" required>
+
+    <label for="comments">Comments</label>
+    <textarea id="comments" name="comments"></textarea>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

@@ -33,6 +33,16 @@ project doesn't have a release yet, so everything below is grouped under
   no concept of submission semantics) and not covered by any other
   check. Always a `Fail`: unlike Bot protection, this is a real defect
   in the form itself.
+- A tenth check, **Required-indicator mismatch**: flags a field whose
+  own label visually promises it's required (a `*`, or the word
+  "required") but isn't actually marked `required` or
+  `aria-required="true"`. The visual promise and the real enforcement
+  silently disagree — native validation and screen readers both treat
+  the field as optional — so a user who skips it can submit incomplete
+  data with no error at all. Not what axe-core's label rule checks
+  (that's about a label *existing*, not about a required-looking one
+  being honored), and not covered by any other check. Always a `Fail`:
+  the field's own label contradicts its own enforcement.
 - **Optional LLM semantic checks** (`--llm` / `llm:` config): two
   provider-agnostic checks — "Error wording (LLM)" and
   "Instructions (LLM)" — that score the clarity of validation error

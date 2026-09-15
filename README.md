@@ -95,6 +95,13 @@ your own use.
   for a repeated key, so two different pieces of information submitted
   under one name means one vanishes with no client-side signal at all —
   not an accessibility issue, and not covered by any other check.
+- **Required-indicator mismatch** — flags a field whose own label
+  visually promises it's required (a `*`, or the word "required") but
+  isn't actually marked `required` or `aria-required`. The visual
+  promise and the real enforcement silently disagree, so a user who
+  skips the field can submit incomplete data with no error at all — not
+  what axe-core's label rule checks (that's about a label *existing*,
+  not about a required-looking one being honored).
 
 ## Commands
 

@@ -814,3 +814,43 @@ async fn form_with_no_duplicate_names_passes() {
         .expect("check_duplicate_names");
     assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
 }
+
+#[tokio::test]
+async fn required_looking_label_with_no_required_attribute_is_a_fail() {
+    // fixtures/required-indicator-mismatch-form.html's "Full name *"
+    // looks required to any user but was never wired up with the real
+    // attribute — native validation and screen readers both treat it as
+    // optional. "Email *" is the correctly-wired case (same visual
+    // promise, backed by `required`), proving no false positive on a
+    // form that got it right; "Comments" has neither a required-looking
+    // label nor the attribute, and is irrelevant to this check either way.
+    let (_browser, page, _handle) = open_fixture("required-indicator-mismatch-form.html").await;
+    let result = checks::check_required_indicator_mismatch(&page)
+        .await
+        .expect("check_required_indicator_mismatch");
+    assert_eq!(result.status, checks::Status::Fail, "got: {result:?}");
+    assert!(
+        result.detail.contains("Full name"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("Email"),
+        "the correctly-wired field must not be flagged, got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("Comments"),
+        "a field with no required-looking label is irrelevant to this check, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn form_with_no_required_looking_labels_passes_the_mismatch_check() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_required_indicator_mismatch(&page)
+        .await
+        .expect("check_required_indicator_mismatch");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}

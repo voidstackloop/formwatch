@@ -980,6 +980,67 @@ pub async fn check_duplicate_names(page: &Page) -> Result<CheckResult> {
     ))
 }
 
+/// Flags a field whose own label visually promises it's required (a `*`,
+/// or the word "required") but that isn't actually marked `required` or
+/// `aria-required="true"`. A form's "required" styling is often wired up
+/// independently of the real validation attribute — the visual promise
+/// and the actual enforcement silently disagree, so a user who skips the
+/// field (it looks optional to native validation and to a screen reader)
+/// can submit incomplete data with no error at all. Not what axe-core's
+/// label rule checks (that's about a label *existing*, not about a
+/// required-looking one being honored), and not covered by any other
+/// check. Always a `Fail`: the field's own label contradicts its own
+/// enforcement — this is objectively verifiable, not a heuristic guess.
+pub async fn check_required_indicator_mismatch(page: &Page) -> Result<CheckResult> {
+    let mismatches: Vec<String> = page
+        .evaluate(format!(
+            r#"(() => {{
+                const f = {TARGET_FORM_JS};
+                const fields = f ? ({DEEP_QUERY_JS})(f, 'input, select, textarea') : [];
+                const labelOf = (el) => {{
+                    const byFor = el.id
+                        && ({DEEP_QUERY_JS})(document, 'label').find((l) => l.htmlFor === el.id)?.textContent;
+                    const byWrap = el.closest('label')?.textContent;
+                    return (byFor || byWrap || '').trim();
+                }};
+                const looksRequired = (text) => /\*|\brequired\b/i.test(text);
+                const mismatches = [];
+                for (const el of fields) {{
+                    if (el.disabled || el.offsetParent === null) continue;
+                    const label = labelOf(el);
+                    if (!label || !looksRequired(label)) continue;
+                    const isRequired = el.required || el.getAttribute('aria-required')?.toLowerCase() === 'true';
+                    if (!isRequired) mismatches.push(label.slice(0, 60));
+                }}
+                return mismatches;
+            }})()"#
+        ))
+        .await?
+        .into_value()?;
+
+    let status = if mismatches.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    Ok(result(
+        "Required-indicator mismatch",
+        status,
+        if mismatches.is_empty() {
+            "Every field whose label looks required (\"*\" or \"required\") is actually marked \
+             required or aria-required."
+                .to_string()
+        } else {
+            format!(
+                "{} field(s) look required by their own label but aren't marked required or \
+                 aria-required — native validation and screen readers treat them as optional: {}.",
+                mismatches.len(),
+                mismatches.join("; ")
+            )
+        },
+    ))
+}
+
 /// Detects a bot-protection/CAPTCHA challenge (reCAPTCHA, hCaptcha,
 /// Cloudflare Turnstile, or a generic "verify you're human" interstitial)
 /// on the page. Never a Fail: none of this is evidence the *form* is
@@ -1222,6 +1283,14 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
             check_timeout,
             capture,
             check_duplicate_names(page),
+        )
+        .await,
+        run_safely(
+            page,
+            "Required-indicator mismatch",
+            check_timeout,
+            capture,
+            check_required_indicator_mismatch(page),
         )
         .await,
         submission,
