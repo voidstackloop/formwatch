@@ -24,6 +24,15 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Added
 
+- A reusable **GitHub Action** (`action.yml`): any repository can add
+  `uses: voidstackloop/formwatch@vX` to its own CI and run `test` or
+  `monitor` with no Rust toolchain — it downloads the matching prebuilt
+  release binary for the runner's OS (Linux/macOS x86_64+ARM64/Windows),
+  reflects formwatch's own exit code, and always writes a full JSON
+  report (exposed as the `report-json` output) regardless of that
+  outcome. `scripts/test-action-locally.sh` exercises the action's own
+  download/extract/invoke logic against a locally-built binary, so
+  changes to `action.yml` don't need a real release to verify.
 - A ninth check, **Duplicate field names**: flags form controls that
   share a `name` attribute with something other than a legitimate
   radio/checkbox group. Standard form encoding keeps only one value (or

@@ -1,0 +1,164 @@
+name: formwatch
+description: >-
+  Test a public-service form (or a forms.yml registry) for broken
+  submission flows, accessibility, mobile usability, lost input, and
+  unclear validation — using a prebuilt formwatch release binary, no
+  Rust toolchain required.
+author: voidstackloop
+branding:
+  icon: check-square
+  color: blue
+
+inputs:
+  url:
+    description: >-
+      A single form URL to test (formwatch test). Mutually exclusive
+      with `config` — set exactly one of the two.
+    required: false
+  config:
+    description: >-
+      Path to a forms.yml (or a shell glob of several) to check every
+      listed form (formwatch monitor). Mutually exclusive with `url`.
+    required: false
+  version:
+    description: 'formwatch release to use, e.g. "v0.1.0". Default: latest.'
+    required: false
+    default: 'latest'
+  submit:
+    description: >-
+      Actually click submit (a real POST) instead of stopping at native
+      validation. Requires `accept-terms: true`.
+    required: false
+    default: 'false'
+  accept-terms:
+    description: >-
+      Acknowledge formwatch's authorized-use notice, required for
+      `submit: true` to run at all. Only set this once you've read
+      docs/legal.md and confirmed you're authorized to test the target
+      form(s) with real submissions.
+    required: false
+    default: 'false'
+  wait:
+    description: 'Seconds to sit idle before checking for lost input / session-timeout wording.'
+    required: false
+    default: '5'
+  checks-dir:
+    description: 'Directory of custom *.js checks to also run.'
+    required: false
+  fail-on:
+    description: 'Which statuses fail the step: "fail" or "warn".'
+    required: false
+    default: 'fail'
+  delay-ms:
+    description: 'Monitor mode only: milliseconds to wait before starting each form''s checks.'
+    required: false
+    default: '0'
+  history-dir:
+    description: 'Where run history is stored/read from.'
+    required: false
+    default: '.formwatch/history'
+  json:
+    description: 'Print the run(s) as JSON to the step log instead of colored text.'
+    required: false
+    default: 'false'
+
+outputs:
+  report-json:
+    description: >-
+      Path to a JSON file (formwatch report --json) covering every form
+      formwatch knows about under `history-dir` after this run — written
+      unconditionally, even when the run itself finds a FAIL, so a later
+      step can always inspect the full result.
+    value: ${{ steps.report.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the release asset for this runner
+      id: target
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64) triple=x86_64-unknown-linux-gnu; ext=tar.gz ;;
+          macOS-X64) triple=x86_64-apple-darwin; ext=tar.gz ;;
+          macOS-ARM64) triple=aarch64-apple-darwin; ext=tar.gz ;;
+          Windows-X64) triple=x86_64-pc-windows-msvc; ext=zip ;;
+          *)
+            echo "::error::formwatch has no release build for ${{ runner.os }}/${{ runner.arch }}" >&2
+            exit 1
+            ;;
+        esac
+        echo "triple=$triple" >> "$GITHUB_OUTPUT"
+        echo "asset=formwatch-$triple.$ext" >> "$GITHUB_OUTPUT"
+        echo "ext=$ext" >> "$GITHUB_OUTPUT"
+
+    - name: Download and extract formwatch ${{ inputs.version }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        dest="${{ runner.temp }}/formwatch-bin"
+        mkdir -p "$dest"
+        version_flag=()
+        if [ "${{ inputs.version }}" != "latest" ]; then
+          version_flag=("${{ inputs.version }}")
+        fi
+        gh release download "${version_flag[@]}" \
+          --repo voidstackloop/formwatch \
+          --pattern '${{ steps.target.outputs.asset }}' \
+          --dir "$dest" \
+          --clobber
+        archive="$dest/${{ steps.target.outputs.asset }}"
+        if [ "${{ steps.target.outputs.ext }}" = "zip" ]; then
+          unzip -q "$archive" -d "$dest"
+        else
+          tar xzf "$archive" -C "$dest"
+        fi
+        bin_dir="$dest/formwatch-${{ steps.target.outputs.triple }}"
+        chmod +x "$bin_dir/formwatch" 2>/dev/null || true
+        echo "$bin_dir" >> "$GITHUB_PATH"
+
+    - name: Run formwatch
+      id: run
+      shell: bash
+      run: |
+        set +e
+        shopt -s globstar
+        args=(--history-dir "${{ inputs.history-dir }}")
+        if [ -n "${{ inputs.url }}" ] && [ -n "${{ inputs.config }}" ]; then
+          echo "::error::set only one of \`url\` or \`config\`, not both" >&2
+          exit 1
+        elif [ -n "${{ inputs.url }}" ]; then
+          args+=(test "${{ inputs.url }}" --wait "${{ inputs.wait }}")
+          [ -n "${{ inputs.checks-dir }}" ] && args+=(--checks-dir "${{ inputs.checks-dir }}")
+        elif [ -n "${{ inputs.config }}" ]; then
+          # Deliberately unquoted: `config` may be a shell glob (e.g.
+          # "community-forms/**/*.yml"), matching monitor's own
+          # documented usage — the calling workflow's shell expands it
+          # into one argument per matched file.
+          args+=(monitor ${{ inputs.config }} --wait "${{ inputs.wait }}" --delay-ms "${{ inputs.delay-ms }}")
+          [ -n "${{ inputs.checks-dir }}" ] && args+=(--checks-dir "${{ inputs.checks-dir }}")
+        else
+          echo "::error::set one of \`url\` (test a single form) or \`config\` (monitor a forms.yml)" >&2
+          exit 1
+        fi
+        [ "${{ inputs.submit }}" = "true" ] && args+=(--submit)
+        [ "${{ inputs.accept-terms }}" = "true" ] && args+=(--accept-terms)
+        [ "${{ inputs.json }}" = "true" ] && args+=(--json)
+        args+=(--fail-on "${{ inputs.fail-on }}")
+
+        formwatch "${args[@]}"
+        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+
+    - name: Build the full report (always, regardless of the run's own exit code)
+      id: report
+      shell: bash
+      run: |
+        path="${{ runner.temp }}/formwatch-report.json"
+        formwatch --history-dir "${{ inputs.history-dir }}" report --json --out "$path" || true
+        echo "path=$path" >> "$GITHUB_OUTPUT"
+
+    - name: Reflect formwatch's own exit code
+      shell: bash
+      run: exit "${{ steps.run.outputs.exit-code }}"

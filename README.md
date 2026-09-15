@@ -311,6 +311,43 @@ the richer history.
 
 ## CI and pipeline integration
 
+### GitHub Action
+
+Any repository can add formwatch to its own CI with no Rust toolchain —
+[`action.yml`](action.yml) downloads a prebuilt release binary for the
+runner's OS and runs it:
+
+```yaml
+- uses: voidstackloop/formwatch@v0.1.0
+  with:
+    url: https://city.gov/apply
+    # or: config: forms.yml   (mutually exclusive with `url`)
+```
+
+The step's own pass/fail reflects formwatch's exit code (same contract
+as the CLI: `fail-on: fail` by default, or `warn` for a stricter gate).
+It also always writes a full JSON report, regardless of that outcome,
+exposed as the `report-json` output for a later step to read:
+
+```yaml
+- uses: voidstackloop/formwatch@v0.1.0
+  id: formwatch
+  with:
+    config: community-forms/**/*.yml
+    delay-ms: '500'
+- run: cat "${{ steps.formwatch.outputs.report-json }}"
+```
+
+See `action.yml`'s `inputs:` for the full list (`submit`, `accept-terms`,
+`wait`, `checks-dir`, `history-dir`, `json`, `version`). It wraps the
+common cases, not every CLI flag — for anything else (LLM checks, a
+baseline, sharding, `--webhook-url`, ...), install the release binary
+directly and call it yourself.
+`scripts/test-action-locally.sh` exercises the action's own logic
+(platform resolution, archive extraction, invocation) against a
+locally-built binary, without needing a real release — useful when
+changing `action.yml` itself.
+
 `test` and `monitor` exit `1` if any check came back `FAIL`, so they gate
 a CI job directly. For richer integration:
 
