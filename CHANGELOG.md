@@ -24,6 +24,21 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Performance
 
+- **`all_known_forms` no longer parses every historical run to find the
+  newest one.** `history::all_known_forms` — behind `formwatch report`,
+  `serve`'s `/metrics`/`/api/forms`, and `baseline --write` — picked each
+  form's newest run by fully parsing *every* run file in that form's
+  directory and keeping the max timestamp, discarding everything else.
+  Since `save_run` already encodes the timestamp in the filename
+  (`{ts}.json` / `{ts}-{suffix}.json`), the winner can be picked by
+  comparing filenames and only that one file needs to be read and
+  parsed — a form directory with months of accumulated history now costs
+  the same as one with a single run. Also fixed a latent robustness gap
+  this exposed: a single corrupted/truncated old run file used to fail
+  `all_known_forms` (and therefore `report`/`serve`/`baseline`) for that
+  entire form; it's now simply never read. `report::build` also had its
+  own copy of the `previous_run` find-predecessor snippet — missed in
+  the fix below — now uses the shared helper too.
 - **History loaded once per invocation, not three times per form.**
   `print_run` (the CLI diff/flakiness display), `notify::regressions_from_history`
   (`--webhook-url`), and `issues::events_from_history`

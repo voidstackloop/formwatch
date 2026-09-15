@@ -123,10 +123,7 @@ pub fn build(history_dir: &Path) -> Result<ReportTemplate> {
     let mut forms = vec![];
     for run in history::all_known_forms(history_dir)? {
         let prior_runs = history::load_runs(history_dir, &run.url)?;
-        let changes = prior_runs
-            .iter()
-            .rev()
-            .find(|r| r.timestamp < run.timestamp)
+        let changes = history::previous_run(&prior_runs, run.timestamp)
             .map(|prev| history::diff(prev, &run))
             .unwrap_or_default();
         let flaky = history::flakiness(&prior_runs);

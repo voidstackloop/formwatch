@@ -216,7 +216,10 @@ share it across the CLI diff/flakiness display, `--webhook-url`, and
 `--github-issues-repo` — all three used to independently reload and
 re-parse the same form's entire history (screenshots included), so a
 long-lived deployment with a lot of accumulated history paid for that
-three times over on every run.
+three times over on every run. `formwatch report`, `serve`, and
+`baseline --write` list every form's newest run the same cheap way: by
+comparing filename timestamps, not by parsing every historical run just
+to find the most recent one.
 
 ## Custom checks
 

@@ -122,28 +122,47 @@ pub fn load_runs(base: &Path, url: &str) -> Result<Vec<RunResult>> {
     Ok(runs.into_iter().map(|(_, run)| run).collect())
 }
 
+/// Parses the leading `{timestamp}` out of a run filename (`{ts}.json` or
+/// `{ts}-{suffix}.json`, as [`save_run`] writes them) without opening or
+/// parsing the file itself — just enough to compare candidates by
+/// recency.
+fn timestamp_from_filename(path: &Path) -> Option<i64> {
+    path.file_stem()?.to_str()?.split('-').next()?.parse().ok()
+}
+
 /// Every URL formwatch has ever recorded a run for, newest run first.
+///
+/// Picks each form's newest run by filename timestamp rather than by
+/// parsing every run just to find the maximum — a form directory with a
+/// long-lived history stays cheap to summarize regardless of how many
+/// older runs it holds, since only the one winning file actually gets
+/// read and deserialized.
 pub fn all_known_forms(base: &Path) -> Result<Vec<RunResult>> {
     if !base.exists() {
         return Ok(vec![]);
     }
     let mut latest = vec![];
     for entry in fs::read_dir(base)? {
-        let path = entry?.path();
-        if !path.is_dir() {
+        let dir = entry?.path();
+        if !dir.is_dir() {
             continue;
         }
-        let mut newest: Option<RunResult> = None;
-        for f in fs::read_dir(&path)? {
-            let f = f?.path();
-            if f.extension().and_then(|e| e.to_str()) == Some("json") {
-                let run: RunResult = serde_json::from_str(&fs::read_to_string(&f)?)?;
-                if newest.as_ref().is_none_or(|n| run.timestamp > n.timestamp) {
-                    newest = Some(run);
-                }
+        let mut newest: Option<(i64, PathBuf)> = None;
+        for f in fs::read_dir(&dir)? {
+            let path = f?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(ts) = timestamp_from_filename(&path) else {
+                continue;
+            };
+            if newest.as_ref().is_none_or(|(best, _)| ts > *best) {
+                newest = Some((ts, path));
             }
         }
-        if let Some(run) = newest {
+        if let Some((_, path)) = newest {
+            let run: RunResult = serde_json::from_str(&fs::read_to_string(&path)?)
+                .with_context(|| format!("parsing {}", path.display()))?;
             latest.push(run);
         }
     }
@@ -585,6 +604,29 @@ mod tests {
         );
         assert_eq!(forms[1].url, "https://city.gov/b");
         assert_eq!(forms[1].timestamp, 200);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn all_known_forms_does_not_need_to_parse_non_newest_files() {
+        // The newest run per form is picked by filename timestamp, not by
+        // fully parsing every file to find the max — proven by corrupting
+        // the OLDER run's file: the old "parse everything" implementation
+        // would error on it, but picking the winner by filename alone
+        // never touches it.
+        let dir = std::env::temp_dir().join("formwatch-test-all-known-forms-corrupt");
+        let _ = fs::remove_dir_all(&dir);
+        let url = "https://city.gov/apply";
+        save_run(&dir, &run_at(url, 100)).expect("save older");
+        save_run(&dir, &run_at(url, 300)).expect("save newest");
+        fs::write(dir_for(&dir, url).join("100.json"), "{not valid json")
+            .expect("corrupt the older run's file");
+
+        let forms =
+            all_known_forms(&dir).expect("the corrupted older file should never need parsing");
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].timestamp, 300);
 
         let _ = fs::remove_dir_all(&dir);
     }
