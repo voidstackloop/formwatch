@@ -60,6 +60,34 @@ pub struct NotifyConfig {
     pub on: Option<NotifyOn>,
 }
 
+/// GitHub Issues auto-tracking settings (`github_issues:` in config).
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GithubIssuesConfig {
+    /// `"owner/repo"` to create/comment-on/close tracking issues in.
+    pub repo: Option<String>,
+    /// GitHub token. Prefer `GITHUB_TOKEN` (set automatically in GitHub
+    /// Actions) or `GH_TOKEN` (the `gh` CLI's own convention) — both are
+    /// consulted at call time if this is unset — over writing a token
+    /// into a config file.
+    pub token: Option<String>,
+    /// Labels applied to a newly created tracking issue. Defaults to
+    /// `["formwatch"]` if unset.
+    pub labels: Option<Vec<String>>,
+}
+
+/// Hand-written so a token accidentally left in a config file is never
+/// printed by a `{:?}` (a debug log line, an error context).
+impl std::fmt::Debug for GithubIssuesConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubIssuesConfig")
+            .field("repo", &self.repo)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("labels", &self.labels)
+            .finish()
+    }
+}
+
 /// Optional LLM semantic-check settings (`llm:` in the config file).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -144,6 +172,8 @@ pub struct Config {
     pub notify: Option<NotifyConfig>,
     /// Optional LLM semantic-check settings.
     pub llm: Option<LlmConfig>,
+    /// Optional GitHub Issues auto-tracking settings.
+    pub github_issues: Option<GithubIssuesConfig>,
 }
 
 /// Reads a boolean-ish environment value.
@@ -240,6 +270,17 @@ impl Config {
                 }
             };
             self.notify.get_or_insert_with(NotifyConfig::default).on = Some(parsed);
+        }
+
+        if let Some(repo) = env_string(&get, "FORMWATCH_GITHUB_ISSUES_REPO") {
+            self.github_issues
+                .get_or_insert_with(GithubIssuesConfig::default)
+                .repo = Some(repo);
+        }
+        if let Some(token) = env_string(&get, "FORMWATCH_GITHUB_ISSUES_TOKEN") {
+            self.github_issues
+                .get_or_insert_with(GithubIssuesConfig::default)
+                .token = Some(token);
         }
 
         macro_rules! llm_set {

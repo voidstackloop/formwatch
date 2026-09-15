@@ -43,6 +43,9 @@ pub mod error;
 pub mod export;
 /// Persists and reloads run history on disk, and diffs consecutive runs.
 pub mod history;
+/// GitHub Issues auto-tracking for regressions: creates a tracking issue
+/// when a check fails, closes it when the check recovers.
+pub mod issues;
 /// Authorized-use and legal notices.
 pub mod legal;
 /// Per-host request pacing.

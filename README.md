@@ -184,7 +184,9 @@ Every command also accepts these global flags:
   `--fail-on fail|warn` (default `fail`; use `warn` to also fail CI on
   warnings).
 - `test`/`monitor` additionally accept `--webhook-url URL` to push a
-  regression notification (Slack or generic JSON) after the run.
+  regression notification (Slack or generic JSON) after the run, and
+  `--github-issues-repo owner/repo` to auto-track regressions as GitHub
+  Issues (see [GitHub Issues auto-tracking](#github-issues-auto-tracking)).
 
 Every run is stored under `.formwatch/history/` in the current directory so
 `monitor` and `report` can diff against history. Override that location
@@ -263,6 +265,10 @@ accept_terms: true          # record acknowledgement of the legal notice
 notify:
   webhook_url: https://hooks.slack.com/services/...
   on: regression            # or: always
+github_issues:
+  repo: voidstackloop/formwatch
+  # token: ghp_...          # falls back to GITHUB_TOKEN / GH_TOKEN
+  labels: [formwatch]
 llm:
   enabled: true
   provider: openai          # openai | anthropic | mock
@@ -285,6 +291,7 @@ in CI and containers: `FORMWATCH_HISTORY_DIR`, `FORMWATCH_CHECKS_DIR`,
 `FORMWATCH_SERVE_ADDR`, `FORMWATCH_ACCEPT_TERMS`,
 `FORMWATCH_KEEP_LAST`, `FORMWATCH_KEEP_DAYS`,
 `FORMWATCH_FAIL_ON`, `FORMWATCH_WEBHOOK_URL`, `FORMWATCH_WEBHOOK_ON`,
+`FORMWATCH_GITHUB_ISSUES_REPO`, `FORMWATCH_GITHUB_ISSUES_TOKEN`,
 `FORMWATCH_LLM`, `FORMWATCH_LLM_PROVIDER`, `FORMWATCH_LLM_MODEL`,
 `FORMWATCH_LLM_API_KEY`, `FORMWATCH_LLM_BASE_URL`,
 `FORMWATCH_LLM_TIMEOUT_SECS`, `FORMWATCH_LLM_MAX_RETRIES`,
@@ -370,6 +377,32 @@ a CI job directly. For richer integration:
   for privacy-sensitive deployments.
 - `--proxy` and `--insecure` route Chrome through a corporate proxy (or a
   trusted test host with a self-signed certificate).
+
+### GitHub Issues auto-tracking
+
+`--github-issues-repo owner/repo` (or `github_issues.repo` /
+`FORMWATCH_GITHUB_ISSUES_REPO`) turns regressions into tracked GitHub
+Issues instead of (or alongside) a webhook ping:
+
+- A check that goes to **Fail** opens an issue, unless one is already
+  open for that exact form URL + check — a stable HTML-comment marker in
+  the issue body is used to find it again, so re-running `monitor` never
+  creates duplicates.
+- A check that recovers to **Pass** comments on and closes its open
+  issue. **Warn** never opens, comments, or closes anything — it isn't a
+  confirmed regression either way.
+- The token comes from `github_issues.token` /
+  `FORMWATCH_GITHUB_ISSUES_TOKEN` first, then the `GITHUB_TOKEN` env var
+  GitHub Actions sets automatically, then `GH_TOKEN` (the `gh` CLI's
+  own convention). No token found just logs a warning and skips tracking
+  for that run — it never fails the run itself.
+- `labels` (`github_issues.labels`) applies extra labels to created
+  issues.
+- Because GitHub's issue-search index is eventually consistent, a lookup
+  for an issue created moments earlier can briefly miss it; tracking
+  retries the search with a short backoff before falling back to
+  creating a new issue, rather than risk a duplicate on every fast
+  `monitor` interval.
 
 ## LLM semantic checks (optional)
 

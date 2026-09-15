@@ -24,6 +24,23 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Added
 
+- **GitHub Issues auto-tracking** (`--github-issues-repo owner/repo`,
+  `github_issues.*` config, `FORMWATCH_GITHUB_ISSUES_REPO`/
+  `FORMWATCH_GITHUB_ISSUES_TOKEN`): a check going to Fail opens a
+  tracking issue, a check recovering to Pass comments and closes it, and
+  Warn never touches issue lifecycle either way. Reuses the same
+  `history::diff` primitive as `--webhook-url` regression notifications
+  rather than a second notion of "what changed." A stable HTML-comment
+  marker (form URL + check name) embedded in the issue body is used to
+  find the same issue again, so repeated `monitor` runs never duplicate
+  it. The token falls back through `github_issues.token` →
+  `GITHUB_TOKEN` (set automatically in GitHub Actions) → `GH_TOKEN` (the
+  `gh` CLI's convention) → a skip-with-warning if none is found, and the
+  integration is never fatal to the run itself. Live testing against a
+  real repository surfaced a genuine bug unit tests couldn't have caught:
+  GitHub's issue-search index is eventually consistent, so a lookup
+  moments after creating an issue can miss it and create a duplicate;
+  fixed with a bounded retry-with-backoff before falling back to create.
 - A reusable **GitHub Action** (`action.yml`): any repository can add
   `uses: voidstackloop/formwatch@vX` to its own CI and run `test` or
   `monitor` with no Rust toolchain — it downloads the matching prebuilt

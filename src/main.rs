@@ -11,7 +11,7 @@ use formwatch::options::RunOptions;
 use formwatch::shard::Shard;
 use formwatch::{
     audit, browser, browser::BrowserOptions, browser::OpenOptions, checks, demo, doctor, export,
-    history, legal, limiter::HostPacer, metrics, notify, report, runner, serve,
+    history, issues, legal, limiter::HostPacer, metrics, notify, report, runner, serve,
 };
 use futures::stream::{self, StreamExt};
 use owo_colors::OwoColorize;
@@ -191,6 +191,11 @@ enum Command {
         /// POST a notification to this webhook (Slack or generic JSON).
         #[arg(long)]
         webhook_url: Option<String>,
+        /// Auto-create/close a GitHub Issue in this "owner/repo" when a
+        /// check regresses to FAIL / recovers to PASS (falls back to
+        /// github_issues.repo in config).
+        #[arg(long)]
+        github_issues_repo: Option<String>,
     },
     /// Run `test` against every form listed in one or more YAML configs
     /// (a shell glob like `community-forms/**/*.yml` works — each match
@@ -226,6 +231,11 @@ enum Command {
         /// POST a notification to this webhook (Slack or generic JSON).
         #[arg(long)]
         webhook_url: Option<String>,
+        /// Auto-create/close a GitHub Issue in this "owner/repo" when a
+        /// check regresses to FAIL / recovers to PASS (falls back to
+        /// github_issues.repo in config).
+        #[arg(long)]
+        github_issues_repo: Option<String>,
     },
     /// Print (or render to HTML/JSON/JUnit/SARIF) the most recent run of every form formwatch knows about.
     Report {
@@ -373,8 +383,19 @@ struct Settings {
     baseline: Option<Baseline>,
     webhook_url: Option<String>,
     webhook_on: NotifyOn,
+    github_issues: Option<GithubIssuesSettings>,
     accepted: bool,
     fail_on: FailOn,
+}
+
+/// Resolved settings for GitHub Issues auto-tracking — only constructed
+/// when a repo is actually configured, so callers can check
+/// `settings.github_issues.is_some()` instead of re-checking a bare repo
+/// string against emptiness everywhere.
+struct GithubIssuesSettings {
+    repo: String,
+    token: String,
+    labels: Vec<String>,
 }
 
 /// Global options shared by every subcommand, lifted out of [`Cli`]
@@ -517,6 +538,7 @@ async fn main() -> Result<()> {
             sarif,
             out,
             webhook_url,
+            github_issues_repo,
         } => {
             let settings = resolve(
                 &globals,
@@ -527,6 +549,7 @@ async fn main() -> Result<()> {
                 checks_dir.or_else(|| config.checks_dir.clone()),
                 0,
                 webhook_url.or_else(|| clone_config_webhook(&config)),
+                github_issues_repo.or_else(|| clone_config_github_issues_repo(&config)),
                 accepted,
             );
             guard_submit(settings.run.allow_submit, settings.accepted)?;
@@ -568,6 +591,7 @@ async fn main() -> Result<()> {
                 )?;
             }
             notify_runs(&settings, std::slice::from_ref(&run)).await;
+            github_issues_for_runs(&settings, std::slice::from_ref(&run)).await;
         }
         Command::Monitor {
             configs,
@@ -581,6 +605,7 @@ async fn main() -> Result<()> {
             out,
             delay_ms,
             webhook_url,
+            github_issues_repo,
         } => {
             let settings = resolve(
                 &globals,
@@ -591,6 +616,7 @@ async fn main() -> Result<()> {
                 checks_dir.or_else(|| config.checks_dir.clone()),
                 delay_ms.or(config.delay_ms).unwrap_or(0),
                 webhook_url.or_else(|| clone_config_webhook(&config)),
+                github_issues_repo.or_else(|| clone_config_github_issues_repo(&config)),
                 accepted,
             );
             guard_submit(settings.run.allow_submit, settings.accepted)?;
@@ -702,6 +728,7 @@ async fn main() -> Result<()> {
             }
 
             notify_runs(&settings, &runs).await;
+            github_issues_for_runs(&settings, &runs).await;
         }
         Command::Report {
             html,
@@ -766,6 +793,44 @@ fn clone_config_webhook(config: &Config) -> Option<String> {
     config.notify.as_ref().and_then(|n| n.webhook_url.clone())
 }
 
+/// The config's GitHub Issues repo, if any.
+fn clone_config_github_issues_repo(config: &Config) -> Option<String> {
+    config.github_issues.as_ref().and_then(|g| g.repo.clone())
+}
+
+/// Resolves [`GithubIssuesSettings`] from a repo string (already merged
+/// CLI > config), the config's own token/labels, and — when the config
+/// gave no token — the environment: `GITHUB_TOKEN` (set automatically in
+/// GitHub Actions) then `GH_TOKEN` (the `gh` CLI's own convention).
+/// Returns `None` (not an error) when no repo is configured at all, or
+/// when a repo is configured but no token can be found anywhere — the
+/// caller should warn, not fail the run, for the latter.
+fn resolve_github_issues(repo: Option<String>, config: &Config) -> Option<GithubIssuesSettings> {
+    let repo = repo?;
+    let cfg = config.github_issues.as_ref();
+    let token = cfg
+        .and_then(|g| g.token.clone())
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+        .or_else(|| std::env::var("GH_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty());
+    let Some(token) = token else {
+        tracing::warn!(
+            repo,
+            "github-issues-repo is set but no token was found (github_issues.token config, \
+             GITHUB_TOKEN, or GH_TOKEN) — regressions won't be tracked as issues this run"
+        );
+        return None;
+    };
+    let labels = cfg
+        .and_then(|g| g.labels.clone())
+        .unwrap_or_else(|| vec!["formwatch".to_string()]);
+    Some(GithubIssuesSettings {
+        repo,
+        token,
+        labels,
+    })
+}
+
 /// Resolves the effective settings for a `test`/`monitor` invocation,
 /// applying CLI > environment > file > default precedence.
 #[allow(clippy::too_many_arguments)]
@@ -778,6 +843,7 @@ fn resolve(
     checks_dir: Option<PathBuf>,
     delay_ms: u64,
     webhook_url: Option<String>,
+    github_issues_repo: Option<String>,
     accepted: bool,
 ) -> Settings {
     Settings {
@@ -836,6 +902,7 @@ fn resolve(
             .as_ref()
             .and_then(|n| n.on)
             .unwrap_or(NotifyOn::Regression),
+        github_issues: resolve_github_issues(github_issues_repo, config),
         accepted,
         fail_on: globals.fail_on.or(config.fail_on).unwrap_or(FailOn::Fail),
     }
@@ -1147,6 +1214,55 @@ async fn notify_runs(settings: &Settings, runs: &[history::RunResult]) {
     }
 }
 
+/// Creates/closes GitHub Issues for `runs`' regressions/recoveries if a
+/// repo is configured. Never fatal, same as [`notify_runs`]: a dead
+/// token or a rate limit is a warning, not a reason to lose a completed
+/// run's results.
+async fn github_issues_for_runs(settings: &Settings, runs: &[history::RunResult]) {
+    let Some(gh) = &settings.github_issues else {
+        return;
+    };
+    let mut events = match issues::events_from_history(&settings.history_dir, runs) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                error = format!("{e:#}"),
+                "could not compute GitHub issue events"
+            );
+            return;
+        }
+    };
+    // A baselined Fail is an accepted finding — it shouldn't spawn a
+    // tracking issue any more than it should page a webhook. A recovery
+    // (-> Pass) closes an issue regardless of baseline state.
+    if let Some(baseline) = &settings.baseline {
+        events.retain(|e| {
+            e.to != checks::Status::Fail || !baseline.is_accepted(&e.url, &e.check, e.to)
+        });
+    }
+    if events.is_empty() {
+        return;
+    }
+    let outcomes = issues::reconcile(&gh.repo, &gh.token, &gh.labels, &events).await;
+    for outcome in outcomes {
+        match outcome {
+            issues::Outcome::Created { check, number } => {
+                tracing::info!(check, number, "GitHub issue created")
+            }
+            issues::Outcome::AlreadyTracked { check, number } => {
+                tracing::debug!(check, number, "GitHub issue already open")
+            }
+            issues::Outcome::Closed { check, number } => {
+                tracing::info!(check, number, "GitHub issue closed on recovery")
+            }
+            issues::Outcome::Skipped => {}
+            issues::Outcome::Failed { check, error } => {
+                tracing::warn!(check, error, "GitHub issue reconciliation failed")
+            }
+        }
+    }
+}
+
 /// Paces a stream so each item is only yielded `delay` after the item
 /// before it (a no-op pass-through when `delay` is zero) — used to
 /// spread `monitor`'s per-form checks out over time instead of firing
@@ -1438,7 +1554,9 @@ mod tests {
             ..Config::default()
         };
 
-        let settings = resolve(&globals, &config, false, 5, false, None, 0, None, false);
+        let settings = resolve(
+            &globals, &config, false, 5, false, None, 0, None, None, false,
+        );
         assert_eq!(settings.fail_on, FailOn::Warn, "CLI --fail-on wins");
         assert!(!settings.run.screenshots, "--no-screenshots wins");
         assert_eq!(
