@@ -24,6 +24,21 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Performance
 
+- **History loaded once per invocation, not three times per form.**
+  `print_run` (the CLI diff/flakiness display), `notify::regressions_from_history`
+  (`--webhook-url`), and `issues::events_from_history`
+  (`--github-issues-repo`) each independently called `history::load_runs`
+  for the same URL — a full directory scan plus a parse of every
+  historical run, screenshots included. With both integrations enabled
+  (the README's own documented full CI setup), that was 3 full history
+  reloads per form, growing with however much history has accumulated.
+  `main::load_prior_by_url` now loads each URL's history once per
+  invocation and shares it; `notify::regressions_from_runs` and
+  `issues::events_from_runs` (renamed, since they no longer touch disk
+  themselves) take that pre-loaded map instead. Also collapsed the
+  `prior.iter().rev().find(|r| r.timestamp < run.timestamp)`
+  "find the predecessor" snippet — copy-pasted identically in all three
+  places — into one `history::previous_run` helper.
 - **LLM client reuse across a whole `monitor` run.** `--llm` semantic
   checks used to build a brand-new HTTP client (`LlmClient::new`) for
   every single form, discarding its connection pool immediately after —

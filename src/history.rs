@@ -166,6 +166,19 @@ pub struct CheckChange {
     pub to: Status,
 }
 
+/// The most recent of `runs` with a timestamp strictly before
+/// `before_timestamp` — "the previous run" that a fresh run is diffed
+/// against, whether for the CLI's own display, a webhook regression, or a
+/// GitHub Issues transition. Works regardless of `runs`' order (callers
+/// typically pass [`load_runs`]'s oldest-first output, which already
+/// includes the fresh run itself at the tail — this simply skips it and
+/// anything else not older).
+pub fn previous_run(runs: &[RunResult], before_timestamp: i64) -> Option<&RunResult> {
+    runs.iter()
+        .filter(|r| r.timestamp < before_timestamp)
+        .max_by_key(|r| r.timestamp)
+}
+
 /// Per-check status changes between two runs of the same form, keyed by
 /// check name so it survives checks being reordered or added/removed.
 pub fn diff(prev: &RunResult, curr: &RunResult) -> Vec<CheckChange> {
@@ -465,6 +478,23 @@ mod tests {
         let report = flakiness(&runs);
         assert_eq!(report.len(), 1);
         assert_eq!(report[0].name, "Accessibility");
+    }
+
+    #[test]
+    fn previous_run_finds_the_newest_run_strictly_before_the_given_timestamp() {
+        let runs = vec![
+            run_at("https://city.gov/a", 10),
+            run_at("https://city.gov/a", 20),
+            run_at("https://city.gov/a", 30),
+        ];
+        // The fresh run (ts=30) itself, and anything at/after it, must be
+        // excluded — otherwise a run would be diffed against itself.
+        assert_eq!(previous_run(&runs, 30).unwrap().timestamp, 20);
+        assert_eq!(previous_run(&runs, 20).unwrap().timestamp, 10);
+        assert!(previous_run(&runs, 10).is_none());
+        // Order-independent.
+        let shuffled = vec![runs[2].clone(), runs[0].clone(), runs[1].clone()];
+        assert_eq!(previous_run(&shuffled, 30).unwrap().timestamp, 20);
     }
 
     #[test]

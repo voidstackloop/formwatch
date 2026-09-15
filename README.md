@@ -211,6 +211,13 @@ flip-flopped rather than settling — a `[FLAKY]` note in plain text, a
 is a genuine regression or fix, not flakiness; only a check that's
 genuinely unstable across several runs gets flagged.
 
+`test`/`monitor` load each form's history exactly once per invocation and
+share it across the CLI diff/flakiness display, `--webhook-url`, and
+`--github-issues-repo` — all three used to independently reload and
+re-parse the same form's entire history (screenshots included), so a
+long-lived deployment with a lot of accumulated history paid for that
+three times over on every run.
+
 ## Custom checks
 
 Anything specific to your forms that the built-in checks don't cover — a

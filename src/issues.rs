@@ -20,7 +20,7 @@
 use crate::checks::Status;
 use crate::error::{Error, Result};
 use crate::history::{self, RunResult};
-use std::path::Path;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// One check's status transition for one form, exactly as recorded by
@@ -41,15 +41,22 @@ pub struct IssueEvent {
     pub to: Status,
 }
 
-/// Every status transition across `runs`, each diffed against the most
-/// recent run recorded for its URL *before* `run.timestamp` — mirrors
-/// [`crate::notify::regressions_from_history`] exactly, except keeping
-/// every transition rather than filtering to `-> Fail` only.
-pub fn events_from_history(history_dir: &Path, runs: &[RunResult]) -> Result<Vec<IssueEvent>> {
+/// Every status transition across `runs`, each diffed against `prior`'s
+/// entry for its URL — mirrors [`crate::notify::regressions_from_runs`]
+/// exactly, except keeping every transition rather than filtering to
+/// `-> Fail` only. `prior` is loaded once per invocation by the caller and
+/// shared with anything else that needs the same history (see
+/// `main::load_prior_by_url`) instead of this re-reading it from disk.
+pub fn events_from_runs(
+    runs: &[RunResult],
+    prior: &HashMap<String, Vec<RunResult>>,
+) -> Vec<IssueEvent> {
     let mut events = Vec::new();
     for run in runs {
-        let prior = history::load_runs(history_dir, &run.url)?;
-        if let Some(prev) = prior.iter().rev().find(|r| r.timestamp < run.timestamp) {
+        let Some(form_history) = prior.get(&run.url) else {
+            continue;
+        };
+        if let Some(prev) = history::previous_run(form_history, run.timestamp) {
             events.extend(history::diff(prev, run).into_iter().map(|c| IssueEvent {
                 form: run.name.clone(),
                 url: run.url.clone(),
@@ -59,7 +66,7 @@ pub fn events_from_history(history_dir: &Path, runs: &[RunResult]) -> Result<Vec
             }));
         }
     }
-    Ok(events)
+    events
 }
 
 /// A stable, greppable marker embedded (as an HTML comment, invisible in
@@ -477,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn events_from_history_keeps_every_transition_not_just_fail() {
+    fn events_from_runs_keeps_every_transition_not_just_fail() {
         let dir = std::env::temp_dir().join("formwatch-test-issues-events");
         let _ = std::fs::remove_dir_all(&dir);
         let url = "https://city.gov/apply";
@@ -486,8 +493,10 @@ mod tests {
         history::save_run(&dir, &run(url, 2, Status::Warn)).expect("save");
         history::save_run(&dir, &run(url, 3, Status::Fail)).expect("save");
 
-        let latest = history::load_runs(&dir, url).expect("load").pop().unwrap();
-        let events = events_from_history(&dir, std::slice::from_ref(&latest)).expect("events");
+        let loaded = history::load_runs(&dir, url).expect("load");
+        let latest = loaded.last().unwrap().clone();
+        let prior = HashMap::from([(url.to_string(), loaded)]);
+        let events = events_from_runs(std::slice::from_ref(&latest), &prior);
 
         // latest (ts=3, Fail) diffed against its predecessor (ts=2, Warn).
         assert_eq!(events.len(), 1);

@@ -15,6 +15,7 @@ use formwatch::{
 };
 use futures::stream::{self, StreamExt};
 use owo_colors::OwoColorize;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -574,6 +575,7 @@ async fn main() -> Result<()> {
             if let Some(path) = &settings.audit_log {
                 audit::append(path, &run)?;
             }
+            let prior_by_url = load_prior_by_url(&settings.history_dir, std::slice::from_ref(&run));
             if junit || sarif {
                 emit_structured(
                     std::slice::from_ref(&run),
@@ -585,15 +587,15 @@ async fn main() -> Result<()> {
                 any_fail |= run_breaches(&run, settings.fail_on, settings.baseline.as_ref());
             } else {
                 any_fail |= print_run(
-                    &settings.history_dir,
+                    prior_by_url.get(&run.url).map(Vec::as_slice).unwrap_or(&[]),
                     &run,
                     json,
                     settings.fail_on,
                     settings.baseline.as_ref(),
                 )?;
             }
-            notify_runs(&settings, std::slice::from_ref(&run)).await;
-            github_issues_for_runs(&settings, std::slice::from_ref(&run)).await;
+            notify_runs(&settings, std::slice::from_ref(&run), &prior_by_url).await;
+            github_issues_for_runs(&settings, std::slice::from_ref(&run), &prior_by_url).await;
         }
         Command::Monitor {
             configs,
@@ -710,6 +712,7 @@ async fn main() -> Result<()> {
                 }
             }
 
+            let prior_by_url = load_prior_by_url(history_dir, &runs);
             if junit || sarif {
                 emit_structured(&runs, junit, sarif, out, settings.baseline.as_ref())?;
                 any_fail |= runs
@@ -723,7 +726,7 @@ async fn main() -> Result<()> {
             } else {
                 for run in &runs {
                     any_fail |= print_run(
-                        history_dir,
+                        prior_by_url.get(&run.url).map(Vec::as_slice).unwrap_or(&[]),
                         run,
                         false,
                         settings.fail_on,
@@ -732,8 +735,8 @@ async fn main() -> Result<()> {
                 }
             }
 
-            notify_runs(&settings, &runs).await;
-            github_issues_for_runs(&settings, &runs).await;
+            notify_runs(&settings, &runs, &prior_by_url).await;
+            github_issues_for_runs(&settings, &runs, &prior_by_url).await;
         }
         Command::Report {
             html,
@@ -1208,18 +1211,18 @@ async fn notify_test(config: &Config, webhook_url: Option<String>, json: bool) -
 
 /// Sends a webhook notification for `runs` if one is configured and the
 /// notify policy calls for it. Never fatal: a failed notification is a
-/// warning, not a reason to lose a completed run's results.
-async fn notify_runs(settings: &Settings, runs: &[history::RunResult]) {
+/// warning, not a reason to lose a completed run's results. `prior` is
+/// loaded once per invocation (see [`load_prior_by_url`]) and shared with
+/// [`print_run`]/[`github_issues_for_runs`] rather than reloaded here.
+async fn notify_runs(
+    settings: &Settings,
+    runs: &[history::RunResult],
+    prior: &HashMap<String, Vec<history::RunResult>>,
+) {
     let Some(url) = settings.webhook_url.as_deref() else {
         return;
     };
-    let mut regressions = match notify::regressions_from_history(&settings.history_dir, runs) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = format!("{e:#}"), "could not compute regressions");
-            return;
-        }
-    };
+    let mut regressions = notify::regressions_from_runs(runs, prior);
     // A regression that the baseline already accepts isn't worth paging on.
     if let Some(baseline) = &settings.baseline {
         regressions.retain(|r| !baseline.is_accepted(&r.url, &r.check, r.to));
@@ -1241,21 +1244,18 @@ async fn notify_runs(settings: &Settings, runs: &[history::RunResult]) {
 /// Creates/closes GitHub Issues for `runs`' regressions/recoveries if a
 /// repo is configured. Never fatal, same as [`notify_runs`]: a dead
 /// token or a rate limit is a warning, not a reason to lose a completed
-/// run's results.
-async fn github_issues_for_runs(settings: &Settings, runs: &[history::RunResult]) {
+/// run's results. `prior` is loaded once per invocation (see
+/// [`load_prior_by_url`]) and shared with [`print_run`]/[`notify_runs`]
+/// rather than reloaded here.
+async fn github_issues_for_runs(
+    settings: &Settings,
+    runs: &[history::RunResult],
+    prior: &HashMap<String, Vec<history::RunResult>>,
+) {
     let Some(gh) = &settings.github_issues else {
         return;
     };
-    let mut events = match issues::events_from_history(&settings.history_dir, runs) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(
-                error = format!("{e:#}"),
-                "could not compute GitHub issue events"
-            );
-            return;
-        }
-    };
+    let mut events = issues::events_from_runs(runs, prior);
     // A baselined Fail is an accepted finding — it shouldn't spawn a
     // tracking issue any more than it should page a webhook. A recovery
     // (-> Pass) closes an issue regardless of baseline state.
@@ -1379,11 +1379,33 @@ fn emit_structured(
     Ok(())
 }
 
+/// Loads each of `runs`' URLs' history exactly once per invocation
+/// (deduplicating repeated URLs) and shares it across [`print_run`],
+/// [`notify_runs`], and [`github_issues_for_runs`] — each of which
+/// otherwise independently calls [`history::load_runs`] for the very same
+/// URL, tripling history reads (each re-parsing every historical run,
+/// screenshots included) for a single `test`/`monitor` invocation. A URL
+/// that fails to load gets an empty history rather than aborting the run.
+fn load_prior_by_url(
+    history_dir: &Path,
+    runs: &[history::RunResult],
+) -> HashMap<String, Vec<history::RunResult>> {
+    let mut prior = HashMap::new();
+    for run in runs {
+        prior
+            .entry(run.url.clone())
+            .or_insert_with(|| history::load_runs(history_dir, &run.url).unwrap_or_default());
+    }
+    prior
+}
+
 /// Prints one run (JSON or colored text, plus the diff against its
 /// previous run) and reports whether it breaches the `--fail-on` policy —
-/// the caller aggregates that into the process exit code.
+/// the caller aggregates that into the process exit code. `prior` is
+/// `run`'s own history, loaded once per invocation by the caller (see
+/// [`load_prior_by_url`]) rather than by this function.
 fn print_run(
-    history_dir: &Path,
+    prior: &[history::RunResult],
     run: &history::RunResult,
     json: bool,
     fail_on: FailOn,
@@ -1395,8 +1417,7 @@ fn print_run(
     }
 
     println!("\n{}", format!("== {} ({}) ==", run.name, run.url).bold());
-    let prior = history::load_runs(history_dir, &run.url)?;
-    let flaky = history::flakiness(&prior);
+    let flaky = history::flakiness(prior);
     for check in &run.checks {
         let baselined = check.status != checks::Status::Pass
             && baseline
@@ -1405,7 +1426,7 @@ fn print_run(
         print_check(check, is_flaky(&flaky, check), baselined);
     }
 
-    if let Some(prev) = prior.iter().rev().find(|r| r.timestamp < run.timestamp) {
+    if let Some(prev) = history::previous_run(prior, run.timestamp) {
         print_changes(&history::diff(prev, run));
     }
     Ok(run_breaches(run, fail_on, baseline))
@@ -1515,6 +1536,37 @@ mod tests {
             timestamp: 0,
             checks,
         }
+    }
+
+    #[test]
+    fn load_prior_by_url_loads_each_url_once_even_with_repeated_urls() {
+        // notify_runs/github_issues_for_runs/print_run all used to call
+        // history::load_runs independently for the same URL; this map is
+        // what replaced that. A `monitor` config could in principle list
+        // the same URL twice, so this also checks the dedup itself, not
+        // just that the map has the right shape.
+        let dir = std::env::temp_dir().join("formwatch-test-load-prior-by-url");
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = history::RunResult {
+            schema_version: history::SCHEMA_VERSION,
+            name: "A".into(),
+            url: "https://city.gov/a".into(),
+            timestamp: 1,
+            checks: vec![],
+        };
+        let b = history::RunResult {
+            url: "https://city.gov/b".into(),
+            ..a.clone()
+        };
+        history::save_run(&dir, &a).expect("save a");
+        history::save_run(&dir, &b).expect("save b");
+
+        let prior = load_prior_by_url(&dir, &[a.clone(), a.clone(), b.clone()]);
+        assert_eq!(prior.len(), 2, "one entry per distinct URL");
+        assert_eq!(prior[&a.url].len(), 1);
+        assert_eq!(prior[&b.url].len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -14,7 +14,7 @@
 use crate::checks::Status;
 use crate::error::{Error, Result};
 use crate::history::{self, RunResult};
-use std::path::Path;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// One check regressing to `Fail` for one form.
@@ -59,19 +59,27 @@ pub fn regressions_between(prev: &RunResult, curr: &RunResult) -> Vec<Regression
         .collect()
 }
 
-/// Every regression across `runs`, each diffed against the most recent
-/// run recorded for its URL *before* `run.timestamp` (so calling this
-/// after `runner::run_one` has already persisted the new run still finds
-/// the correct predecessor).
-pub fn regressions_from_history(history_dir: &Path, runs: &[RunResult]) -> Result<Vec<Regression>> {
+/// Every regression across `runs`, each diffed against `prior`'s entry for
+/// its URL (the most recent run there from before `run.timestamp`, so this
+/// still finds the correct predecessor even though `prior` was loaded
+/// after the new run was already persisted). `prior` is loaded once per
+/// invocation by the caller and shared with whatever else needs the same
+/// history in the same invocation (see `main::load_prior_by_url`), rather
+/// than this re-reading a form's entire history from disk itself.
+pub fn regressions_from_runs(
+    runs: &[RunResult],
+    prior: &HashMap<String, Vec<RunResult>>,
+) -> Vec<Regression> {
     let mut regressions = Vec::new();
     for run in runs {
-        let prior = history::load_runs(history_dir, &run.url)?;
-        if let Some(prev) = prior.iter().rev().find(|r| r.timestamp < run.timestamp) {
+        let Some(form_history) = prior.get(&run.url) else {
+            continue;
+        };
+        if let Some(prev) = history::previous_run(form_history, run.timestamp) {
             regressions.extend(regressions_between(prev, run));
         }
     }
-    Ok(regressions)
+    regressions
 }
 
 /// Whether a webhook URL is a Slack incoming webhook (which wants a
