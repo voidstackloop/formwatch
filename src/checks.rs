@@ -918,6 +918,71 @@ pub async fn check_autofill_hints(page: &Page) -> Result<CheckResult> {
     ))
 }
 
+/// Guesses a field's semantic purpose from its label the same way
+/// [`check_autofill_hints`] does, but checks the `type` attribute instead
+/// of `autocomplete`: a field that looks like an email address or phone
+/// number and is left as `type="text"` (or untyped, which is the same
+/// thing) gets no native format validation, and on a phone the wrong
+/// virtual keyboard — a full alphabetic layout instead of an
+/// email-optimized or numeric-telephone one — a real mobile-usability
+/// cost for exactly the kind of form people fill out on their phone.
+/// Scoped to email/phone only: both have a well-supported dedicated
+/// `type` and an unambiguous label pattern, unlike e.g. a ZIP code (where
+/// `type="number"` would actively be wrong — it strips a leading zero
+/// and adds spinner arrows). A heuristic guess from label wording, like
+/// autofill hints, so a mismatch is a `Warn`, not a `Fail`.
+pub async fn check_input_type_mismatch(page: &Page) -> Result<CheckResult> {
+    let mismatches: Vec<String> = page
+        .evaluate(format!(
+            r#"(() => {{
+                const emailGuess = /e-?mail/i;
+                const telGuess = /telephone|phone|mobile|cell|fax/i;
+                const f = {TARGET_FORM_JS};
+                const fields = f ? ({DEEP_QUERY_JS})(f, 'input[type=text], input:not([type])') : [];
+                const labelOf = (el) => {{
+                    const byFor = el.id
+                        && ({DEEP_QUERY_JS})(document, 'label').find((l) => l.htmlFor === el.id)?.textContent;
+                    const byWrap = el.closest('label')?.textContent;
+                    return (byFor || byWrap || el.name || el.id || '').trim();
+                }};
+                const mismatches = [];
+                for (const el of fields) {{
+                    if (el.disabled || el.offsetParent === null) continue;
+                    const label = labelOf(el);
+                    if (!label) continue;
+                    if (emailGuess.test(label)) mismatches.push('email: ' + label.slice(0, 60));
+                    else if (telGuess.test(label)) mismatches.push('tel: ' + label.slice(0, 60));
+                }}
+                return mismatches;
+            }})()"#
+        ))
+        .await?
+        .into_value()?;
+
+    let status = if mismatches.is_empty() {
+        Status::Pass
+    } else {
+        Status::Warn
+    };
+    Ok(result(
+        "Input type mismatch",
+        status,
+        if mismatches.is_empty() {
+            "No field labeled like an email address or phone number is missing the matching \
+             input type."
+                .to_string()
+        } else {
+            format!(
+                "{} field(s) look like an email address or phone number but use type=\"text\" \
+                 (or no type at all) — no native format validation, and the wrong keyboard on \
+                 mobile: {}.",
+                mismatches.len(),
+                mismatches.join(", ")
+            )
+        },
+    ))
+}
+
 /// Flags form controls that share a `name` attribute with something they
 /// shouldn't. Standard form encoding keeps only one value (or silently
 /// merges them in a way the server likely doesn't expect) for a repeated
@@ -1332,6 +1397,14 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
             check_timeout,
             capture,
             check_autofill_hints(page),
+        )
+        .await,
+        run_safely(
+            page,
+            "Input type mismatch",
+            check_timeout,
+            capture,
+            check_input_type_mismatch(page),
         )
         .await,
         run_safely(

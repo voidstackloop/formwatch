@@ -79,6 +79,12 @@ your own use.
   axe-core checks a *present* `autocomplete` is valid; this catches the
   more common gap of a missing one, which matters for anyone leaning on
   a password manager or browser autofill (WCAG 1.3.5).
+- **Input type mismatch** — flags a field labeled like an email address
+  or phone number that's left as `type="text"` (or untyped): no native
+  format validation, and the wrong virtual keyboard on mobile. Scoped to
+  email/phone only, where the guess is unambiguous and the dedicated
+  `type` is well-supported — unlike, say, a ZIP code, where
+  `type="number"` would actively be the wrong call.
 - **Input persistence** — fills a field, waits (`--wait`, default 5s), and
   checks the value is still there and whether the page started showing
   session-timeout wording. A real 15-30 minute timeout isn't waited out by

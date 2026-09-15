@@ -122,6 +122,18 @@ project doesn't have a release yet, so everything below is grouped under
   (that's about a label *existing*, not about a required-looking one
   being honored), and not covered by any other check. Always a `Fail`:
   the field's own label contradicts its own enforcement.
+- An eleventh check, **Input type mismatch**: guesses a field's
+  semantic purpose from its label the same way Autofill hints does, but
+  checks the `type` attribute instead of `autocomplete` — a field
+  labeled like an email address or phone number left as `type="text"`
+  (or untyped) gets no native format validation, and the wrong virtual
+  keyboard on mobile (a full alphabetic layout instead of an
+  email-optimized or numeric-telephone one). Deliberately scoped to
+  email/phone only: both have a well-supported dedicated `type` and an
+  unambiguous label pattern, unlike e.g. a ZIP code, where
+  `type="number"` would actively be the wrong call (it strips a leading
+  zero and adds spinner arrows). A heuristic guess from label wording,
+  like Autofill hints, so a mismatch is a `Warn`, not a `Fail`.
 - **Optional LLM semantic checks** (`--llm` / `llm:` config): two
   provider-agnostic checks — "Error wording (LLM)" and
   "Instructions (LLM)" — that score the clarity of validation error

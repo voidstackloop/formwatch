@@ -855,3 +855,48 @@ async fn form_with_no_required_looking_labels_passes_the_mismatch_check() {
         .expect("check_required_indicator_mismatch");
     assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
 }
+
+#[tokio::test]
+async fn email_and_phone_looking_labels_left_as_plain_text_are_a_warn() {
+    // fixtures/input-type-mismatch-form.html's "Contact email" and
+    // "Daytime phone" are both left as type="text" — no native format
+    // validation, and the wrong virtual keyboard on mobile. "Confirm
+    // email" has the identical email-guess label wording but is
+    // correctly wired as type="email", proving no false positive on a
+    // form that got it right; "Comments" matches neither guess and is
+    // irrelevant to this check either way.
+    let (_browser, page, _handle) = open_fixture("input-type-mismatch-form.html").await;
+    let result = checks::check_input_type_mismatch(&page)
+        .await
+        .expect("check_input_type_mismatch");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("Contact email"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("Daytime phone"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("Confirm email"),
+        "the correctly-wired type=\"email\" field must not be flagged, got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("Comments"),
+        "a field matching neither guess is irrelevant to this check, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn form_with_no_email_or_phone_looking_labels_passes_the_type_check() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_input_type_mismatch(&page)
+        .await
+        .expect("check_input_type_mismatch");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}

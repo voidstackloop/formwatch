@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Input Type Mismatch</title></head>
+<body>
+  <!-- "Contact email" is left as plain text: no native format
+       validation, and a phone gets a full alphabetic keyboard instead
+       of an email-optimized one. "Confirm email" is the correctly-wired
+       case (same label wording, backed by type="email"), proving the
+       check doesn't false-positive on a form that got it right.
+       "Daytime phone" is the tel-guess true positive. "Comments" has no
+       email/phone-looking label — irrelevant, should not be flagged. -->
+  <form>
+    <label for="email">Contact email</label>
+    <input id="email" name="email" type="text">
+
+    <label for="email2">Confirm email</label>
+    <input id="email2" name="email2" type="email">
+
+    <label for="phone">Daytime phone</label>
+    <input id="phone" name="phone" type="text">
+
+    <label for="comments">Comments</label>
+    <textarea id="comments" name="comments"></textarea>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
