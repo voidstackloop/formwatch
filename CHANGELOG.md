@@ -134,6 +134,21 @@ project doesn't have a release yet, so everything below is grouped under
   `type="number"` would actively be the wrong call (it strips a leading
   zero and adds spinner arrows). A heuristic guess from label wording,
   like Autofill hints, so a mismatch is a `Warn`, not a `Fail`.
+- A twelfth check, **Viewport zoom**: flags a viewport meta tag that
+  disables (`user-scalable=no`) or caps below 2x (`maximum-scale`)
+  pinch-zoom — a WCAG 1.4.4 (Resize Text) failure that blocks every
+  low-vision user on the page, not just screen-reader users. Distinct
+  from Mobile usability (which measures overflow and tap-target size,
+  not zoom capability); axe-core has no rule for viewport zoom at all.
+  Objectively verifiable, so a hit is a `Fail`.
+- A thirteenth check, **Generic link text**: flags `<a>` links whose
+  entire accessible text is a well-known ambiguous phrase ("click
+  here", "read more", "learn more", ...) — meaningless in a screen
+  reader's links-list view and a WCAG 2.4.4 (Link Purpose) failure.
+  Scoped to links, not buttons, so a lone "Submit" button on an
+  ordinary form is never flagged. A phrase match is a heuristic, not a
+  certainty (surrounding text might disambiguate it), so a hit is a
+  `Warn`, matching Autofill hints/Input type mismatch's precedent.
 - **Optional LLM semantic checks** (`--llm` / `llm:` config): two
   provider-agnostic checks — "Error wording (LLM)" and
   "Instructions (LLM)" — that score the clarity of validation error

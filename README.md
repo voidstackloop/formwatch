@@ -66,6 +66,14 @@ your own use.
   labels, contrast, ARIA, landmarks.
 - **Mobile usability** — emulates a 375px-wide phone viewport, flags
   horizontal overflow and tap targets under the WCAG-recommended 44x44px.
+- **Viewport zoom** — flags a viewport meta tag that disables
+  (`user-scalable=no`) or caps below 2x (`maximum-scale`) pinch-zoom, a
+  WCAG 1.4.4 failure that blocks every low-vision user on the page, not
+  just screen-reader users. axe-core has no rule for this at all.
+- **Generic link text** — flags `<a>` links whose entire text is a
+  well-known ambiguous phrase ("click here", "read more", ...) — useless
+  in a screen reader's links-list view (WCAG 2.4.4). Scoped to links, not
+  buttons, so an ordinary lone "Submit" button is never flagged.
 - **Validation errors** — triggers native browser validation and checks
   that invalid fields have a screen-reader-visible error message
   (`aria-describedby` pointing at real text), not just a color change.

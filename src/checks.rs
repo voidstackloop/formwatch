@@ -983,6 +983,91 @@ pub async fn check_input_type_mismatch(page: &Page) -> Result<CheckResult> {
     ))
 }
 
+/// Flags a viewport `<meta>` tag that disables pinch-zoom
+/// (`user-scalable=no`) or caps it below 2x (`maximum-scale`). This is a
+/// WCAG 1.4.4 (Resize Text) failure that hits every low-vision user on
+/// the page, not just screen-reader users — and it's objectively
+/// verifiable (the tag either restricts zoom or it doesn't), so a hit is
+/// a `Fail`, not a heuristic `Warn`. Distinct from the Mobile usability
+/// check, which measures overflow and tap-target size, not zoom
+/// capability; axe-core has no rule for viewport zoom at all.
+pub async fn check_viewport_zoom(page: &Page) -> Result<CheckResult> {
+    let blocked: bool = page
+        .evaluate(
+            r#"(() => {
+                const content = document.querySelector('meta[name=viewport]')?.content || '';
+                const noScale = /user-scalable\s*=\s*no/i.test(content);
+                const maxScale = content.match(/maximum-scale\s*=\s*([\d.]+)/i);
+                return Boolean(noScale || (maxScale && parseFloat(maxScale[1]) < 2));
+            })()"#,
+        )
+        .await?
+        .into_value()?;
+
+    Ok(result(
+        "Viewport zoom",
+        if blocked { Status::Fail } else { Status::Pass },
+        if blocked {
+            "The viewport meta tag disables or caps pinch-zoom (user-scalable=no or \
+             maximum-scale < 2) — a low-vision user on a phone can't zoom in to read this \
+             page (WCAG 1.4.4)."
+                .to_string()
+        } else {
+            "No viewport restriction on pinch-zoom found.".to_string()
+        },
+    ))
+}
+
+/// Flags `<a>` links whose entire accessible text is a well-known
+/// ambiguous phrase ("click here", "read more", ...) — useless in a
+/// screen reader's links-list view, and a WCAG 2.4.4 (Link Purpose)
+/// failure when the surrounding text doesn't disambiguate it either.
+/// Scoped to links only, not buttons: a lone "Submit" button is normal
+/// and flagging it would just be noise on ordinary forms. A phrase
+/// match is a heuristic, not a certainty (the link might be adequately
+/// explained by adjacent text), so this is a `Warn`.
+pub async fn check_generic_link_text(page: &Page) -> Result<CheckResult> {
+    let hits: Vec<String> = page
+        .evaluate(
+            r#"(() => {
+                const generic = new Set([
+                    'click here', 'here', 'read more', 'more', 'learn more', 'this link', 'link',
+                ]);
+                const hits = [];
+                for (const a of document.querySelectorAll('a[href]')) {
+                    if (a.offsetParent === null) continue;
+                    const text = (a.textContent || a.getAttribute('aria-label') || '')
+                        .trim().toLowerCase();
+                    if (generic.has(text)) hits.push(text);
+                }
+                return hits;
+            })()"#,
+        )
+        .await?
+        .into_value()?;
+
+    let status = if hits.is_empty() {
+        Status::Pass
+    } else {
+        Status::Warn
+    };
+    Ok(result(
+        "Generic link text",
+        status,
+        if hits.is_empty() {
+            "No link's entire text is a generic phrase like \"click here\" or \"read more\"."
+                .to_string()
+        } else {
+            format!(
+                "{} link(s) with no accessible purpose beyond generic text — meaningless in a \
+                 screen reader's links list: {}.",
+                hits.len(),
+                hits.join(", ")
+            )
+        },
+    ))
+}
+
 /// Flags form controls that share a `name` attribute with something they
 /// shouldn't. Standard form encoding keeps only one value (or silently
 /// merges them in a way the server likely doesn't expect) for a repeated
@@ -1373,6 +1458,22 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
             check_timeout,
             capture,
             check_mobile_usability(page),
+        )
+        .await,
+        run_safely(
+            page,
+            "Viewport zoom",
+            check_timeout,
+            capture,
+            check_viewport_zoom(page),
+        )
+        .await,
+        run_safely(
+            page,
+            "Generic link text",
+            check_timeout,
+            capture,
+            check_generic_link_text(page),
         )
         .await,
         run_safely(

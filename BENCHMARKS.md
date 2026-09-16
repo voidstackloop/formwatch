@@ -9,8 +9,8 @@ a clean baseline plus a page for every check and known edge case — and
 `monitor demo-sites/forms.yml` checks all of them.
 
 Because everything is served from `127.0.0.1`, there's no network latency in
-these numbers — what's left is browser launch, the eleven built-in checks per
-form, screenshot capture, and report writing.
+these numbers — what's left is browser launch, the thirteen built-in checks
+per form, screenshot capture, and report writing.
 
 ## Latest results
 
@@ -20,10 +20,10 @@ section below used to only assert about:
 
 | Forms | Checks/run | Runs | `--wait` | Concurrency | Screenshots | min (s) | median (s) | max (s) | forms/min | checks/s |
 |------:|-----------:|-----:|---------:|------------:|:------------|--------:|-----------:|--------:|----------:|---------:|
-| 35 | 385 | 5 | 1s | 4 (default) | on | 12.78 | 13.36 | 13.59 | 157.2 | 28.8 |
-| 35 | 385 | 5 | 1s | 4 (default) | off | 12.03 | 12.61 | 12.93 | 166.5 | 30.5 |
-| 35 | 385 | 5 | 1s | 1 | on | 47.21 | 47.44 | 47.66 | 44.3 | 8.1 |
-| 35 | 385 | 3 | 1s | 8 | on | 7.87 | 8.05 | 8.12 | 260.9 | 47.8 |
+| 35 | 455 | 5 | 1s | 4 (default) | on | 13.17 | 13.43 | 13.94 | 156.4 | 33.9 |
+| 35 | 455 | 5 | 1s | 4 (default) | off | 12.49 | 12.51 | 12.67 | 167.9 | 36.4 |
+| 35 | 455 | 5 | 1s | 1 | on | 47.76 | 47.85 | 48.32 | 43.9 | 9.5 |
+| 35 | 455 | 3 | 1s | 8 | on | 7.98 | 8.14 | 8.16 | 258.0 | 55.9 |
 
 The 35 demo forms cover a clean baseline, a failing page for most checks, a
 three-step wizard and its slow/keyup/icon-only variants, shadow-DOM and
@@ -60,15 +60,15 @@ Everything is local; it never contacts a third-party site.
   time, not overhead — set `WAIT=0` to see the floor. Real `monitor` runs
   against remote forms add page-load time on top.
 - **Concurrency matters far more than raw speed.** Going from
-  `--max-concurrent 1` to the default `4` cut the median from 47.4s to
-  13.4s on this 16-thread machine — a ~3.5x speedup from running more
+  `--max-concurrent 1` to the default `4` cut the median from 47.9s to
+  13.4s on this 16-thread machine — a ~3.6x speedup from running more
   browsers at once, not from anything getting individually faster.
   `--max-concurrent 8` cut it further to 8.1s, though gains taper as
   contention for CPU/Chrome processes grows; the per-host pacer
   (`--per-host-delay-ms`) is the polite counterweight when checking a real,
   shared third-party host rather than a local demo server.
 - **Screenshots cost something, but modestly**: 13.4s with screenshots vs.
-  12.6s with `--no-screenshots` on this same demo mix — about 6%, worth
+  12.5s with `--no-screenshots` on this same demo mix — about 7%, worth
   knowing but not the dominant cost. Every non-Pass check captures a
   full-page PNG; `--no-screenshots` trades that evidence for the difference.
 - **A failing page is slower than a passing one** (screenshots plus the

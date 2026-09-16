@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Generic Link Text</title></head>
+<body>
+  <!-- "Click here" and "Read more" carry no meaning out of context — a
+       screen reader's links-list view shows only this text, with none
+       of the surrounding prose. "View the eligibility requirements" is
+       the correctly-worded case (same destination-ish intent, real
+       purpose in the text itself), proving the check doesn't
+       false-positive on a form that got it right. A lone "Submit"
+       button is deliberately absent from this fixture's concern — the
+       check only looks at <a> links, never buttons. -->
+  <p>Need help? <a href="/faq">Click here</a> for the FAQ.</p>
+  <p><a href="/guide">Read more</a> about this program.</p>
+  <p><a href="/eligibility">View the eligibility requirements</a>.</p>
+  <form>
+    <label for="name">Full name</label>
+    <input id="name" name="name" type="text">
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

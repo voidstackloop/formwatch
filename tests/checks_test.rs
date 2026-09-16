@@ -900,3 +900,63 @@ async fn form_with_no_email_or_phone_looking_labels_passes_the_type_check() {
         .expect("check_input_type_mismatch");
     assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
 }
+
+#[tokio::test]
+async fn viewport_disabling_pinch_zoom_is_a_fail() {
+    // fixtures/viewport-zoom-form.html sets user-scalable=no, which
+    // blocks pinch-zoom outright — a low-vision user on a phone can't
+    // zoom in to read the page no matter what they do (WCAG 1.4.4).
+    let (_browser, page, _handle) = open_fixture("viewport-zoom-form.html").await;
+    let result = checks::check_viewport_zoom(&page)
+        .await
+        .expect("check_viewport_zoom");
+    assert_eq!(result.status, checks::Status::Fail, "got: {result:?}");
+}
+
+#[tokio::test]
+async fn form_with_no_viewport_meta_tag_passes_the_zoom_check() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_viewport_zoom(&page)
+        .await
+        .expect("check_viewport_zoom");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}
+
+#[tokio::test]
+async fn links_with_only_generic_text_are_a_warn() {
+    // fixtures/generic-link-text-form.html's "Click here" and "Read
+    // more" links carry no meaning out of context. "View the
+    // eligibility requirements" has the same kind of destination but
+    // real wording, proving no false positive on a link that got it
+    // right; the page's "Submit" button is irrelevant to this check,
+    // which only looks at <a> links.
+    let (_browser, page, _handle) = open_fixture("generic-link-text-form.html").await;
+    let result = checks::check_generic_link_text(&page)
+        .await
+        .expect("check_generic_link_text");
+    assert_eq!(result.status, checks::Status::Warn, "got: {result:?}");
+    assert!(
+        result.detail.contains("click here"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("read more"),
+        "got: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("eligibility"),
+        "a link with real accessible text must not be flagged, got: {}",
+        result.detail
+    );
+}
+
+#[tokio::test]
+async fn form_with_no_links_passes_the_generic_link_text_check() {
+    let (_browser, page, _handle) = open_fixture("test-form.html").await;
+    let result = checks::check_generic_link_text(&page)
+        .await
+        .expect("check_generic_link_text");
+    assert_eq!(result.status, checks::Status::Pass, "got: {result:?}");
+}
