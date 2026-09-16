@@ -522,6 +522,12 @@ It binds to `127.0.0.1` by default; set `--addr`, `serve_addr:`, or
 `/readyz`, or a status page at `/api/forms`. It runs until interrupted
 (Ctrl-C).
 
+`/metrics` and `/api/forms` cache the loaded history for 2 seconds,
+shared across every connection the process handles — since a scrape
+interval is almost always shorter than how often `monitor` actually
+writes a new run, this avoids re-walking the whole history directory
+(and re-reading every form's latest run file) on every single poll.
+
 ## Retention
 
 History is append-only, so a deployment that runs nightly accumulates runs

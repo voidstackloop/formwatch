@@ -16,6 +16,7 @@
 //! to `127.0.0.1` by default.
 
 use crate::history;
+use crate::history::RunResult;
 use crate::metrics;
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -26,8 +27,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
@@ -37,9 +38,55 @@ const JSON: &str = "application/json; charset=utf-8";
 
 const INDEX: &str = "formwatch (read-only)\n\n  GET /healthz    liveness\n  GET /readyz     readiness\n  GET /metrics    Prometheus metrics\n  GET /api/forms  latest run of every form (JSON)\n";
 
+/// How long a loaded [`history::all_known_forms`] result is reused before
+/// the next `/metrics` or `/api/forms` request re-reads history from
+/// disk. `/metrics` in particular is meant to be scraped (Prometheus,
+/// `/readyz`-style liveness polling, a status page) far more often than
+/// `monitor` actually writes new runs — without this, every scrape
+/// re-walked the entire history directory (one file read per form) for
+/// data that, almost always, hadn't changed since the last scrape a few
+/// seconds earlier. Short enough that nobody scraping a monitoring
+/// endpoint will notice the staleness.
+const HISTORY_CACHE_TTL: Duration = Duration::from_secs(2);
+
+/// Caches the last [`history::all_known_forms`] result for
+/// [`HISTORY_CACHE_TTL`], shared across every request `serve` handles —
+/// `/metrics` and `/api/forms` both read through it instead of each
+/// re-scanning history independently.
+struct HistoryCache {
+    ttl: Duration,
+    loaded: Mutex<Option<(Instant, Arc<Vec<RunResult>>)>>,
+}
+
+impl HistoryCache {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            loaded: Mutex::new(None),
+        }
+    }
+
+    fn get_or_load(&self, history_dir: &Path) -> Result<Arc<Vec<RunResult>>> {
+        let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((fetched_at, runs)) = loaded.as_ref()
+            && fetched_at.elapsed() < self.ttl
+        {
+            return Ok(runs.clone());
+        }
+        let runs = Arc::new(history::all_known_forms(history_dir)?);
+        *loaded = Some((Instant::now(), runs.clone()));
+        Ok(runs)
+    }
+}
+
 /// Routes a request to a `(status, content-type, body)` triple. Kept
 /// separate from the socket plumbing so it can be unit-tested directly.
-fn route(method: &Method, path: &str, history_dir: &Path) -> (StatusCode, &'static str, String) {
+fn route(
+    method: &Method,
+    path: &str,
+    history_dir: &Path,
+    cache: &HistoryCache,
+) -> (StatusCode, &'static str, String) {
     if method != Method::GET {
         return (
             StatusCode::METHOD_NOT_ALLOWED,
@@ -57,7 +104,7 @@ fn route(method: &Method, path: &str, history_dir: &Path) -> (StatusCode, &'stat
                 format!("history directory not writable: {e}\n"),
             ),
         },
-        "/metrics" => match history::all_known_forms(history_dir) {
+        "/metrics" => match cache.get_or_load(history_dir) {
             Ok(runs) => (StatusCode::OK, PROMETHEUS, metrics::render(&runs)),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -65,8 +112,8 @@ fn route(method: &Method, path: &str, history_dir: &Path) -> (StatusCode, &'stat
                 format!("error rendering metrics: {e}\n"),
             ),
         },
-        "/api/forms" | "/api/runs" => match history::all_known_forms(history_dir) {
-            Ok(runs) => match serde_json::to_string_pretty(&runs) {
+        "/api/forms" | "/api/runs" => match cache.get_or_load(history_dir) {
+            Ok(runs) => match serde_json::to_string_pretty(&*runs) {
                 Ok(body) => (StatusCode::OK, JSON, body),
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -100,9 +147,10 @@ fn readiness(history_dir: &Path) -> std::io::Result<()> {
 async fn handle(
     req: Request<Incoming>,
     history_dir: PathBuf,
+    cache: Arc<HistoryCache>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let path = req.uri().path().to_string();
-    let (status, content_type, body) = route(req.method(), &path, &history_dir);
+    let (status, content_type, body) = route(req.method(), &path, &history_dir, &cache);
     let response = Response::builder()
         .status(status)
         .header("content-type", content_type)
@@ -130,6 +178,7 @@ pub async fn run(history_dir: PathBuf, addr: SocketAddr) -> Result<()> {
     // with unbounded half-open connections.
     const MAX_CONNECTIONS: usize = 64;
     let limit = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let cache = Arc::new(HistoryCache::new(HISTORY_CACHE_TTL));
 
     loop {
         tokio::select! {
@@ -149,10 +198,11 @@ pub async fn run(history_dir: PathBuf, addr: SocketAddr) -> Result<()> {
                     }
                 };
                 let history_dir = history_dir.clone();
+                let cache = cache.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     let io = TokioIo::new(stream);
-                    let service = service_fn(move |req| handle(req, history_dir.clone()));
+                    let service = service_fn(move |req| handle(req, history_dir.clone(), cache.clone()));
                     if let Err(e) =
                         hyper::server::conn::http1::Builder::new()
                             .header_read_timeout(Duration::from_secs(10))
@@ -199,13 +249,21 @@ mod tests {
         dir
     }
 
+    /// A cache that never actually caches, so existing tests see exactly
+    /// the same "always fresh" behavior `route` had before the cache
+    /// existed.
+    fn no_cache() -> HistoryCache {
+        HistoryCache::new(Duration::ZERO)
+    }
+
     #[test]
     fn health_and_readiness_are_ok() {
         let dir = seeded_history("health");
-        let (status, _, body) = route(&Method::GET, "/healthz", &dir);
+        let cache = no_cache();
+        let (status, _, body) = route(&Method::GET, "/healthz", &dir, &cache);
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "ok\n");
-        let (status, _, _) = route(&Method::GET, "/readyz", &dir);
+        let (status, _, _) = route(&Method::GET, "/readyz", &dir, &cache);
         assert_eq!(status, StatusCode::OK);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -219,7 +277,7 @@ mod tests {
         // fails, so readiness must report 503.
         let file = base.join("history");
         std::fs::write(&file, b"x").expect("write file");
-        let (status, _, _) = route(&Method::GET, "/readyz", &file);
+        let (status, _, _) = route(&Method::GET, "/readyz", &file, &no_cache());
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -227,7 +285,7 @@ mod tests {
     #[test]
     fn metrics_endpoint_renders_prometheus() {
         let dir = seeded_history("metrics");
-        let (status, content_type, body) = route(&Method::GET, "/metrics", &dir);
+        let (status, content_type, body) = route(&Method::GET, "/metrics", &dir, &no_cache());
         assert_eq!(status, StatusCode::OK);
         assert!(content_type.contains("version=0.0.4"));
         assert!(body.contains("formwatch_forms 1"), "{body}");
@@ -238,7 +296,7 @@ mod tests {
     #[test]
     fn forms_endpoint_returns_json() {
         let dir = seeded_history("forms");
-        let (status, content_type, body) = route(&Method::GET, "/api/forms", &dir);
+        let (status, content_type, body) = route(&Method::GET, "/api/forms", &dir, &no_cache());
         assert_eq!(status, StatusCode::OK);
         assert!(content_type.contains("application/json"));
         let value: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
@@ -250,11 +308,57 @@ mod tests {
     #[test]
     fn unknown_paths_and_write_methods_are_rejected() {
         let dir = seeded_history("unknown");
-        let (status, _, _) = route(&Method::GET, "/nope", &dir);
+        let cache = no_cache();
+        let (status, _, _) = route(&Method::GET, "/nope", &dir, &cache);
         assert_eq!(status, StatusCode::NOT_FOUND);
         // Critically, nothing that mutates is served.
-        let (status, _, _) = route(&Method::POST, "/api/forms", &dir);
+        let (status, _, _) = route(&Method::POST, "/api/forms", &dir, &cache);
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metrics_are_cached_within_the_ttl_and_refreshed_after_it_expires() {
+        let dir = seeded_history("cache-ttl");
+        let cache = HistoryCache::new(Duration::from_millis(50));
+
+        let (_, _, first) = route(&Method::GET, "/metrics", &dir, &cache);
+        assert!(first.contains("formwatch_forms 1"), "{first}");
+
+        // A second form's run lands on disk, but within the TTL the
+        // cached result must still be served — proving this genuinely
+        // avoids re-reading history, not just that it returns correct
+        // data on a cold cache.
+        history::save_run(
+            &dir,
+            &RunResult {
+                schema_version: SCHEMA_VERSION,
+                name: "Renewal".into(),
+                url: "https://city.gov/renewal".into(),
+                timestamp: 43,
+                checks: vec![CheckResult {
+                    name: "Accessibility".into(),
+                    status: Status::Pass,
+                    detail: String::new(),
+                    screenshot: None,
+                }],
+            },
+        )
+        .expect("save second run");
+
+        let (_, _, still_cached) = route(&Method::GET, "/metrics", &dir, &cache);
+        assert!(
+            still_cached.contains("formwatch_forms 1"),
+            "expected the cached (stale) count within the TTL, got: {still_cached}"
+        );
+
+        std::thread::sleep(Duration::from_millis(60));
+        let (_, _, refreshed) = route(&Method::GET, "/metrics", &dir, &cache);
+        assert!(
+            refreshed.contains("formwatch_forms 2"),
+            "expected a fresh read after the TTL expired, got: {refreshed}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

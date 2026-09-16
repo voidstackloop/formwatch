@@ -24,6 +24,16 @@ project doesn't have a release yet, so everything below is grouped under
 
 ### Performance
 
+- **`serve`'s `/metrics` and `/api/forms` cache history for 2 seconds.**
+  Both endpoints called `history::all_known_forms` fresh on every single
+  request, even though `serve` exists specifically to be *polled* —
+  Prometheus scraping `/metrics`, an orchestrator hitting `/readyz`, a
+  status page refreshing `/api/forms` — far more often than `monitor`
+  actually writes a new run. A shared, short-TTL cache (`HistoryCache`)
+  means repeated scrapes within the same interval reuse one loaded
+  result instead of each re-walking the whole history directory; a scrape
+  a few seconds later than the last real change is indistinguishable
+  from a fresh read to any monitoring consumer.
 - **`prune` no longer opens or parses any run file.** Same anti-pattern
   as `all_known_forms` below, in the one command whose entire job is
   handling a *lot* of accumulated history: `history::prune` read and
