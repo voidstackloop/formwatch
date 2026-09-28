@@ -14,6 +14,18 @@ formwatch monitor forms.yml
 formwatch report --html
 ```
 
+![formwatch HTML report](docs/images/html-report.png)
+
+<details>
+<summary>More screenshots and diagrams</summary>
+
+![formwatch test in the terminal](docs/images/terminal-test.png)
+![formwatch monitor over the demo site](docs/images/terminal-monitor.png)
+![Check pipeline](docs/images/diagram-pipeline.svg)
+
+More in [docs/diagrams.md](docs/diagrams.md).
+</details>
+
 See [CHANGELOG.md](CHANGELOG.md) for what's shipped so far, and
 [docs/adr/0001-formwatch-architecture.md](docs/adr/0001-formwatch-architecture.md)
 for why it's built the way it is.
