@@ -37,7 +37,7 @@ jobs:
         run: cargo run -- --history-dir results report --json --out results/index.json
 
       - name: Commit updated results
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "formwatch: update community results"
           file_pattern: results/**
