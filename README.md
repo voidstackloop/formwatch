@@ -26,6 +26,27 @@ formwatch report --html
 More in [docs/diagrams.md](docs/diagrams.md).
 </details>
 
+## Install
+
+Prebuilt binaries for Linux (x86_64), macOS (Intel and Apple Silicon) and
+Windows are attached to each [GitHub release](https://github.com/voidstackloop/formwatch/releases/latest),
+along with a `SHA256SUMS.txt`. On Linux:
+
+```sh
+curl -sSL https://github.com/voidstackloop/formwatch/releases/latest/download/formwatch-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv formwatch-x86_64-unknown-linux-gnu/formwatch /usr/local/bin/
+formwatch --version
+```
+
+Or build from source with Rust 1.88 or newer:
+
+```sh
+cargo install --git https://github.com/voidstackloop/formwatch --locked
+```
+
+formwatch needs Chrome or Chromium; if neither is on `PATH`, it downloads a
+headless build on first run (see [Requirements](#requirements)).
+
 See [CHANGELOG.md](CHANGELOG.md) for what's shipped so far, and
 [docs/adr/0001-formwatch-architecture.md](docs/adr/0001-formwatch-architecture.md)
 for why it's built the way it is.

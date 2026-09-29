@@ -1,10 +1,12 @@
 # Changelog
 
-Format follows [Keep a Changelog](https://keepachangelog.com/); this
-project doesn't have a release yet, so everything below is grouped under
-`[Unreleased]`.
+Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-29
+
+First release, with prebuilt binaries for Linux, macOS and Windows.
 
 ### Security
 
