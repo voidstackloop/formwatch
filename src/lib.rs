@@ -31,6 +31,8 @@ pub mod browser;
 /// The check engine: every built-in check, plus running `--checks-dir`
 /// custom checks.
 pub mod checks;
+/// Generates starter CI workflows (`formwatch ci`).
+pub mod ci;
 /// Configuration file and environment-variable support.
 pub mod config;
 /// Bundled demo site (`formwatch demo`).
@@ -43,6 +45,8 @@ pub mod error;
 pub mod export;
 /// Persists and reloads run history on disk, and diffs consecutive runs.
 pub mod history;
+/// History analytics: trends, flakes, history, export (`insights`).
+pub mod insights;
 /// GitHub Issues auto-tracking for regressions: creates a tracking issue
 /// when a check fails, closes it when the check recovers.
 pub mod issues;
@@ -69,3 +73,9 @@ pub mod runner;
 pub mod serve;
 /// Deterministic work partitioning (`--shard`) for large registries.
 pub mod shard;
+/// Sitemap-based form discovery (`formwatch sitemap`).
+pub mod sitemap;
+/// Validates a forms.yml registry without launching a browser.
+pub mod validate;
+/// Passive form-vulnerability detection (no attack payloads).
+pub mod vuln;

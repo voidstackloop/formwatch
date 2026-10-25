@@ -10,8 +10,9 @@ use formwatch::logging::{self, LogFormat};
 use formwatch::options::RunOptions;
 use formwatch::shard::Shard;
 use formwatch::{
-    audit, browser, browser::BrowserOptions, browser::OpenOptions, checks, demo, doctor, export,
-    history, issues, legal, limiter::HostPacer, metrics, notify, report, runner, serve,
+    audit, browser, browser::BrowserOptions, browser::OpenOptions, checks, ci, demo, doctor,
+    export, history, insights, issues, legal, limiter::HostPacer, metrics, notify, report, runner,
+    serve, sitemap, validate, vuln,
 };
 use futures::stream::{self, StreamExt};
 use owo_colors::OwoColorize;
@@ -35,7 +36,7 @@ const MAX_CONCURRENT_FORMS: usize = 4;
 #[command(
     name = "formwatch",
     version,
-    about = "Tests public-service forms for broken flows, accessibility, mobile usability, and lost input.",
+    about = "Tests public-service forms for broken flows, accessibility, mobile usability, lost input, and common passive vulnerabilities.",
     after_help = "Use formwatch only on forms you own or are authorized to test. Run `formwatch legal` for the full authorized-use notice."
 )]
 struct Cli {
@@ -94,6 +95,17 @@ struct Cli {
     #[arg(long, global = true)]
     per_host_delay_ms: Option<u64>,
 
+    /// Retry a form whose page never loaded this many extra times (default 0).
+    /// Only load failures retry — a form that loads but fails checks is a
+    /// real result, not a transient worth re-probing a third-party site for.
+    #[arg(long, global = true)]
+    retries: Option<u32>,
+
+    /// Fail forms whose wall-clock run exceeds this many milliseconds
+    /// (emits a synthetic `Load budget` check, so --fail-on applies).
+    #[arg(long, global = true)]
+    max_load_ms: Option<u64>,
+
     /// Maximum forms to check concurrently in `monitor` (default 4).
     #[arg(long, global = true)]
     max_concurrent: Option<usize>,
@@ -109,6 +121,11 @@ struct Cli {
     /// Status that makes the process exit non-zero: fail (default) or warn.
     #[arg(long, global = true, value_enum)]
     fail_on: Option<FailOn>,
+
+    /// Skip the passive vulnerability checks (insecure transport, form
+    /// data protection, security headers, information disclosure).
+    #[arg(long, global = true)]
+    skip_vuln: bool,
 
     #[command(flatten)]
     llm: LlmArgs,
@@ -186,7 +203,10 @@ enum Command {
         /// Render the run as SARIF 2.1.0 (for code-scanning UIs).
         #[arg(long, conflicts_with = "json")]
         sarif: bool,
-        /// Where to write --junit/--sarif output (default: stdout).
+        /// Render the run as CSV (one row per check, for spreadsheets).
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif"])]
+        csv: bool,
+        /// Where to write --junit/--sarif/--csv output (default: stdout).
         #[arg(long)]
         out: Option<PathBuf>,
         /// POST a notification to this webhook (Slack or generic JSON).
@@ -220,7 +240,10 @@ enum Command {
         /// Render the runs as SARIF 2.1.0 (for code-scanning UIs).
         #[arg(long, conflicts_with = "json")]
         sarif: bool,
-        /// Where to write --junit/--sarif output (default: stdout).
+        /// Render the runs as CSV (one row per check, for spreadsheets).
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif"])]
+        csv: bool,
+        /// Where to write --junit/--sarif/--csv output (default: stdout).
         #[arg(long)]
         out: Option<PathBuf>,
         /// Milliseconds to wait before starting each form's checks (0 = no
@@ -238,24 +261,114 @@ enum Command {
         #[arg(long)]
         github_issues_repo: Option<String>,
     },
-    /// Print (or render to HTML/JSON/JUnit/SARIF) the most recent run of every form formwatch knows about.
+    /// Keep re-running `monitor` against every form in one or more YAML
+    /// configs, watching for regressions until stopped. Each cycle saves
+    /// history (so `formwatch serve` stays live), notifies on new
+    /// regressions, and prints a one-line summary — full detail only for
+    /// runs that breach `--fail-on`.
+    Watch {
+        #[arg(required = true)]
+        configs: Vec<PathBuf>,
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        wait: Option<u64>,
+        #[arg(long)]
+        headful: bool,
+        #[arg(long)]
+        checks_dir: Option<PathBuf>,
+        /// Seconds between full passes over all forms (default 300).
+        #[arg(long)]
+        interval_secs: Option<u64>,
+        /// Stop after this many cycles (default: run until Ctrl+C).
+        /// Useful for CI smoke runs.
+        #[arg(long)]
+        max_cycles: Option<u64>,
+        /// Milliseconds to wait before starting each form's checks (0 = no
+        /// delay).
+        #[arg(long)]
+        delay_ms: Option<u64>,
+        /// Emit one compact JSON object per cycle to stdout (JSONL — one
+        /// line per cycle) instead of the human summary.
+        #[arg(long)]
+        json: bool,
+        /// Render each cycle as JUnit XML (for CI test dashboards).
+        #[arg(long, conflicts_with_all = ["json", "sarif"])]
+        junit: bool,
+        /// Render each cycle as SARIF 2.1.0 (for code-scanning UIs).
+        #[arg(long, conflicts_with = "json")]
+        sarif: bool,
+        /// Render each cycle as CSV (one row per check, for spreadsheets).
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif"])]
+        csv: bool,
+        /// Where to write --junit/--sarif/--csv output (default: stdout).
+        /// The file is overwritten each cycle, so it always holds the
+        /// latest pass.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// POST a notification to this webhook (Slack or generic JSON).
+        #[arg(long)]
+        webhook_url: Option<String>,
+        /// Auto-create/close a GitHub Issue in this "owner/repo" when a
+        /// check regresses to FAIL / recovers to PASS (falls back to
+        /// github_issues.repo in config).
+        #[arg(long)]
+        github_issues_repo: Option<String>,
+    },
+    /// Print (or render to HTML/JSON/JUnit/SARIF/CSV) the most recent run of every form formwatch knows about.
     Report {
-        #[arg(long, conflicts_with_all = ["json", "junit", "sarif", "prometheus"])]
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif", "prometheus", "csv", "markdown"])]
         html: bool,
         #[arg(long)]
         json: bool,
         /// Render as JUnit XML (for CI test dashboards).
-        #[arg(long, conflicts_with_all = ["json", "sarif", "prometheus"])]
+        #[arg(long, conflicts_with_all = ["json", "sarif", "prometheus", "csv"])]
         junit: bool,
         /// Render as SARIF 2.1.0 (for code-scanning UIs).
-        #[arg(long, conflicts_with_all = ["json", "prometheus"])]
+        #[arg(long, conflicts_with_all = ["json", "prometheus", "csv"])]
         sarif: bool,
         /// Render as Prometheus text-exposition metrics.
-        #[arg(long, conflicts_with_all = ["json", "junit", "sarif"])]
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif", "csv"])]
         prometheus: bool,
+        /// Render as CSV (one row per check, for spreadsheets).
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif", "prometheus", "markdown"])]
+        csv: bool,
+        /// Render as Markdown (one section per form, for issues/wikis).
+        #[arg(long, conflicts_with_all = ["json", "junit", "sarif", "prometheus", "csv"])]
+        markdown: bool,
         /// Where to write output (default: stdout for JSON, else a named file).
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Scan one form URL for common passive vulnerabilities only (no
+    /// attack payloads are ever sent — DOM and response headers only).
+    Vuln {
+        url: String,
+        /// Label to show for this form (defaults to the URL).
+        #[arg(long)]
+        name: Option<String>,
+        /// Show the browser window instead of running headless.
+        #[arg(long)]
+        headful: bool,
+        /// Print the findings as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+        /// Only show findings at or above this severity
+        /// (low, medium, high, critical).
+        #[arg(long)]
+        min_severity: Option<String>,
+    },
+    /// Inspect the tamper-evident audit log: verify its hash chain or show recent entries.
+    Audit {
+        /// Verify the hash chain and report breaks (exit 1 when broken).
+        #[arg(long)]
+        verify: bool,
+        /// Show the last N entries (default 10). Ignored with --verify.
+        #[arg(long)]
+        show: Option<usize>,
+        /// Print entries (or the verify report) as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Print the full authorized-use / legal notice and exit.
     Legal,
@@ -294,17 +407,106 @@ enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
-    /// Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms).
+    /// Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms, /api/summary).
     Serve {
         /// Address to bind (default: 127.0.0.1:8080).
         #[arg(long)]
         addr: Option<SocketAddr>,
+        /// Require `Authorization: Bearer <token>` on every data endpoint
+        /// (/healthz and /readyz stay open for probes).
+        #[arg(long)]
+        api_token: Option<String>,
     },
     /// Serve the bundled demo site so you can see what formwatch catches.
     Demo {
         /// Address to bind (default: 127.0.0.1:8099).
         #[arg(long)]
         addr: Option<SocketAddr>,
+    },
+    /// Lint one or more forms.yml registries without launching a browser.
+    Validate {
+        /// Registry files to lint (default: forms.yml).
+        #[arg(default_value = "forms.yml")]
+        configs: Vec<PathBuf>,
+        /// Also GET each syntactically-valid URL and report reachability.
+        #[arg(long)]
+        probe: bool,
+        /// Print issues as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pass-rate, current status, and streaks per form over history.
+    Trends {
+        /// Only consider the last N runs per form (default: all history).
+        #[arg(long)]
+        last_n: Option<usize>,
+        /// Exit 1 when any form's pass rate is below this (0.0-1.0).
+        #[arg(long)]
+        min_pass_rate: Option<f64>,
+        /// Print as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Checks that keep flip-flopping instead of settling (2+ transitions).
+    Flakes {
+        /// Print as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show what changed between a form's last two runs.
+    Diff {
+        /// Form URL or display name.
+        target: String,
+        /// Print as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a form's recorded run history (newest last).
+    History {
+        /// Form URL or display name.
+        target: String,
+        /// Only show the last N runs.
+        #[arg(long)]
+        last_n: Option<usize>,
+        /// Print runs as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Dump full history (every run of every form) for warehouses/dashboards.
+    Export {
+        /// Format: `jsonl` (one run per line), `json` (pretty array), or
+        /// `csv` (one row per check).
+        #[arg(long, default_value = "jsonl")]
+        format: String,
+        /// Where to write (default: stdout).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Discover candidate form pages from a sitemap (or a site root).
+    Sitemap {
+        /// Sitemap URL, or a site root (robots.txt + /sitemap.xml tried).
+        url: String,
+        /// Cap on candidate page URLs (default 200).
+        #[arg(long)]
+        max_urls: Option<usize>,
+        /// Fetch each page and keep only ones containing a <form>.
+        #[arg(long)]
+        check_forms: bool,
+        /// Print as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a starter GitHub Actions workflow that validates + monitors.
+    Ci {
+        /// Registry path as it should appear in the workflow.
+        #[arg(long, default_value = "forms.yml")]
+        forms: String,
+        /// Cron schedule for the scheduled run.
+        #[arg(long, default_value = "0 8 * * 1")]
+        schedule: String,
+        /// Where to write (default: .github/workflows/formwatch.yml).
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Delete old history runs, keeping the most recent ones.
     Prune {
@@ -325,7 +527,7 @@ struct FormsConfig {
     forms: Vec<FormEntry>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 struct FormEntry {
     name: String,
     url: String,
@@ -372,6 +574,7 @@ const EXAMPLE_CUSTOM_CHECK_JS: &str = r#"// Custom check example. Run it with:
 /// Everything resolved from CLI + config + environment for one invocation.
 struct Settings {
     history_dir: PathBuf,
+    retries: u32,
     checks_dir: Option<PathBuf>,
     run: RunOptions,
     browser: BrowserOptions,
@@ -404,6 +607,8 @@ struct GithubIssuesSettings {
 #[derive(Default)]
 struct Globals {
     history_dir: Option<PathBuf>,
+    retries: Option<u32>,
+    max_load_ms: Option<u64>,
     no_screenshots: bool,
     proxy: Option<String>,
     insecure: bool,
@@ -415,6 +620,7 @@ struct Globals {
     shard: Option<Shard>,
     check_timeout_secs: Option<u64>,
     fail_on: Option<FailOn>,
+    skip_vuln: bool,
     llm: LlmArgs,
 }
 
@@ -439,7 +645,10 @@ async fn main() -> Result<()> {
         shard,
         check_timeout_secs,
         fail_on,
+        skip_vuln,
         llm,
+        retries,
+        max_load_ms,
     } = Cli::parse();
     logging::init(verbose, quiet, log_format);
 
@@ -447,6 +656,8 @@ async fn main() -> Result<()> {
     let accepted = legal::is_accepted(accept_terms, config.accept_terms);
     let globals = Globals {
         history_dir,
+        retries,
+        max_load_ms,
         no_screenshots,
         proxy,
         insecure,
@@ -458,6 +669,7 @@ async fn main() -> Result<()> {
         shard,
         check_timeout_secs,
         fail_on,
+        skip_vuln,
         llm,
     };
 
@@ -475,7 +687,7 @@ async fn main() -> Result<()> {
         Command::Baseline { write, out, json } => {
             baseline_command(&globals, &config, write, out, json)?
         }
-        Command::Serve { addr } => {
+        Command::Serve { addr, api_token } => {
             let addr = match addr {
                 Some(addr) => addr,
                 None => match &config.serve_addr {
@@ -486,7 +698,11 @@ async fn main() -> Result<()> {
                 },
             };
             let history_dir = settings_history_dir(&globals, &config);
-            serve::run(history_dir, addr).await?;
+            let token = api_token
+                .or_else(|| config.serve_api_token.clone())
+                .or_else(|| std::env::var("FORMWATCH_SERVE_API_TOKEN").ok())
+                .filter(|t| !t.trim().is_empty());
+            serve::run_with(history_dir, addr, serve::ServeOptions { api_token: token }).await?;
         }
         Command::Demo { addr } => {
             let addr = addr.unwrap_or_else(|| "127.0.0.1:8099".parse().expect("valid default"));
@@ -537,6 +753,7 @@ async fn main() -> Result<()> {
             json,
             junit,
             sarif,
+            csv,
             out,
             webhook_url,
             github_issues_repo,
@@ -561,26 +778,55 @@ async fn main() -> Result<()> {
             if let Some(host) = host_of(&url) {
                 pacer.wait_turn(&host).await;
             }
-            let run = runner::run_one_with(
+            let started = std::time::Instant::now();
+            let label = name.unwrap_or_else(|| url.clone());
+            let mut run = runner::run_one_with(
                 &browser,
                 &settings.history_dir,
-                name.unwrap_or_else(|| url.clone()),
-                url,
+                label.clone(),
+                url.clone(),
                 &settings.run,
                 &settings.open,
                 settings.checks_dir.as_deref(),
                 llm_client.as_ref(),
             )
             .await?;
+            let mut attempt = 0u32;
+            while is_load_failure(&run) && attempt < settings.retries {
+                attempt += 1;
+                tracing::warn!(attempt, "page load failed; retrying");
+                tokio::time::sleep(Duration::from_secs(2u64.pow(attempt.min(4)))).await;
+                run = runner::run_one_with(
+                    &browser,
+                    &settings.history_dir,
+                    label.clone(),
+                    url.clone(),
+                    &settings.run,
+                    &settings.open,
+                    settings.checks_dir.as_deref(),
+                    llm_client.as_ref(),
+                )
+                .await?;
+            }
             if let Some(path) = &settings.audit_log {
-                audit::append(path, &run)?;
+                let ctx = audit::AuditContext::capture(
+                    "test",
+                    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    settings.run.allow_submit,
+                    match settings.fail_on {
+                        FailOn::Fail => "fail",
+                        FailOn::Warn => "warn",
+                    },
+                );
+                audit::append_with_context(path, &run, &ctx)?;
             }
             let prior_by_url = load_prior_by_url(&settings.history_dir, std::slice::from_ref(&run));
-            if junit || sarif {
+            if junit || sarif || csv {
                 emit_structured(
                     std::slice::from_ref(&run),
                     junit,
                     sarif,
+                    csv,
                     out,
                     settings.baseline.as_ref(),
                 )?;
@@ -597,6 +843,83 @@ async fn main() -> Result<()> {
             notify_runs(&settings, std::slice::from_ref(&run), &prior_by_url).await;
             github_issues_for_runs(&settings, std::slice::from_ref(&run), &prior_by_url).await;
         }
+        Command::Vuln {
+            url,
+            name,
+            headful,
+            json,
+            min_severity,
+        } => {
+            let settings = resolve(
+                &globals,
+                &config,
+                false,
+                5,
+                headful || config.headful.unwrap_or(false),
+                None,
+                0,
+                None,
+                None,
+                accepted,
+            );
+            let label = name.unwrap_or_else(|| url.clone());
+            let min = match min_severity.as_deref() {
+                None => None,
+                Some(s) => Some(s.parse::<vuln::Severity>().map_err(anyhow::Error::msg)?),
+            };
+            let (browser, _handle) = browser::launch_with(&settings.browser).await?;
+            let pacer = HostPacer::new(Duration::from_millis(settings.per_host_delay_ms));
+            if let Some(host) = host_of(&url) {
+                pacer.wait_turn(&host).await;
+            }
+            let started = std::time::Instant::now();
+            let (page, capture) = browser::open_with_capture(&browser, &url, &settings.open)
+                .await
+                .with_context(|| format!("opening {url}"))?;
+            if let Some(doc) = &capture {
+                vuln::seed_capture(doc);
+            }
+            let checks = vuln::run_vuln_checks_filtered(&page, min).await;
+            let _ = page.close().await;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let run = history::RunResult {
+                schema_version: history::SCHEMA_VERSION,
+                name: label,
+                url: url.clone(),
+                timestamp,
+                checks,
+            };
+            if let Some(path) = &settings.audit_log {
+                let ctx = audit::AuditContext::capture(
+                    "vuln",
+                    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    false,
+                    match settings.fail_on {
+                        FailOn::Fail => "fail",
+                        FailOn::Warn => "warn",
+                    },
+                );
+                audit::append_with_context(path, &run, &ctx)?;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&run.checks)?);
+            } else {
+                println!("Vulnerability scan: {} ({})", run.name, run.url);
+                if let Some(m) = min {
+                    println!("(showing {} and above)", m.label());
+                }
+                for check in &run.checks {
+                    println!("{} {}", check.status.label(), check.name);
+                    for line in check.detail.lines() {
+                        println!("  {line}");
+                    }
+                }
+            }
+            any_fail |= run_breaches(&run, settings.fail_on, None);
+        }
         Command::Monitor {
             configs,
             submit,
@@ -606,6 +929,7 @@ async fn main() -> Result<()> {
             json,
             junit,
             sarif,
+            csv,
             out,
             delay_ms,
             webhook_url,
@@ -658,63 +982,19 @@ async fn main() -> Result<()> {
             let (browser, _handle) = browser::launch_with(&settings.browser).await?;
             let pacer = HostPacer::new(Duration::from_millis(settings.per_host_delay_ms));
             let llm_client = build_llm_client(&settings.run.llm);
-            let run_opts = &settings.run;
-            let open_opts = &settings.open;
-            let checks_dir_ref = settings.checks_dir.as_deref();
-            let history_dir = &settings.history_dir;
-
-            let mut indexed: Vec<(usize, history::RunResult)> = paced(
-                stream::iter(entries.into_iter().enumerate()),
-                Duration::from_millis(settings.delay_ms),
+            let runs = check_all_forms(
+                &settings,
+                "monitor",
+                &entries,
+                &browser,
+                &pacer,
+                llm_client.as_ref(),
             )
-            .map(|(i, entry)| {
-                let browser = &browser;
-                let pacer = &pacer;
-                let llm_client = llm_client.as_ref();
-                async move {
-                    if let Some(host) = host_of(&entry.url) {
-                        pacer.wait_turn(&host).await;
-                    }
-                    match runner::run_one_with(
-                        browser,
-                        history_dir,
-                        entry.name.clone(),
-                        entry.url,
-                        run_opts,
-                        open_opts,
-                        checks_dir_ref,
-                        llm_client,
-                    )
-                    .await
-                    {
-                        Ok(run) => Some((i, run)),
-                        Err(e) => {
-                            tracing::error!(
-                                form = %entry.name,
-                                error = format!("{e:#}"),
-                                "form check failed"
-                            );
-                            None
-                        }
-                    }
-                }
-            })
-            .buffer_unordered(settings.max_concurrent.max(1))
-            .filter_map(|x| async move { x })
-            .collect()
-            .await;
-            indexed.sort_by_key(|(i, _)| *i);
-            let runs: Vec<history::RunResult> = indexed.into_iter().map(|(_, r)| r).collect();
+            .await?;
 
-            for run in &runs {
-                if let Some(path) = &settings.audit_log {
-                    audit::append(path, run)?;
-                }
-            }
-
-            let prior_by_url = load_prior_by_url(history_dir, &runs);
-            if junit || sarif {
-                emit_structured(&runs, junit, sarif, out, settings.baseline.as_ref())?;
+            let prior_by_url = load_prior_by_url(&settings.history_dir, &runs);
+            if junit || sarif || csv {
+                emit_structured(&runs, junit, sarif, csv, out, settings.baseline.as_ref())?;
                 any_fail |= runs
                     .iter()
                     .any(|r| run_breaches(r, settings.fail_on, settings.baseline.as_ref()));
@@ -738,12 +1018,209 @@ async fn main() -> Result<()> {
             notify_runs(&settings, &runs, &prior_by_url).await;
             github_issues_for_runs(&settings, &runs, &prior_by_url).await;
         }
+        Command::Watch {
+            configs,
+            submit,
+            wait,
+            headful,
+            checks_dir,
+            interval_secs,
+            max_cycles,
+            delay_ms,
+            json,
+            junit,
+            sarif,
+            csv,
+            out,
+            webhook_url,
+            github_issues_repo,
+        } => {
+            let settings = resolve(
+                &globals,
+                &config,
+                submit || config.submit.unwrap_or(false),
+                wait.or(config.wait).unwrap_or(5),
+                headful || config.headful.unwrap_or(false),
+                checks_dir.or_else(|| config.checks_dir.clone()),
+                delay_ms.or(config.delay_ms).unwrap_or(0),
+                webhook_url.or_else(|| clone_config_webhook(&config)),
+                github_issues_repo.or_else(|| clone_config_github_issues_repo(&config)),
+                accepted,
+            );
+            guard_submit(settings.run.allow_submit, settings.accepted)?;
+
+            let mut entries = vec![];
+            for config_path in &configs {
+                match load_forms_config(config_path) {
+                    Ok(cfg) => entries.extend(cfg.forms),
+                    Err(e) => {
+                        tracing::error!(
+                            config = %config_path.display(),
+                            error = format!("{e:#}"),
+                            "skipping unreadable config"
+                        );
+                        any_fail = true;
+                    }
+                }
+            }
+
+            let entries = match settings.shard {
+                Some(shard) => {
+                    let total = entries.len();
+                    let selected = shard.select(entries);
+                    tracing::info!(
+                        shard = %shard,
+                        selected = selected.len(),
+                        total,
+                        "shard selected"
+                    );
+                    selected
+                }
+                None => entries,
+            };
+            if entries.is_empty() {
+                bail!("nothing to watch: all configs were unreadable or listed no forms");
+            }
+            let interval =
+                Duration::from_secs(interval_secs.or(config.watch_interval_secs).unwrap_or(300));
+            if interval.is_zero() {
+                bail!("--interval-secs must be greater than zero");
+            }
+
+            let (browser, _handle) = browser::launch_with(&settings.browser).await?;
+            let pacer = HostPacer::new(Duration::from_millis(settings.per_host_delay_ms));
+            let llm_client = build_llm_client(&settings.run.llm);
+            // Machine mode (any export flag): stdout carries only the
+            // per-cycle artifact — one JSON object per line for --json
+            // (JSONL), one document per cycle otherwise — so humans get
+            // nothing on stdout and parsers never choke on prose. The
+            // startup/stop notes go to stderr instead.
+            let machine = json || junit || sarif || csv;
+            let startup = format!(
+                "Watching {} form(s) every {}s — Ctrl+C to stop. Each cycle saves history, so `formwatch serve` stays live.",
+                entries.len(),
+                interval.as_secs()
+            );
+            if machine {
+                eprintln!("{startup}");
+            } else {
+                println!("{startup}");
+            }
+            let mut interrupted = false;
+            let mut watch_failed = false;
+            let mut cycle = 0u64;
+            loop {
+                cycle += 1;
+                let cycle_started = std::time::Instant::now();
+                let runs = match check_all_forms(
+                    &settings,
+                    "watch",
+                    &entries,
+                    &browser,
+                    &pacer,
+                    llm_client.as_ref(),
+                )
+                .await
+                {
+                    Ok(runs) => runs,
+                    Err(e) => {
+                        // A dead browser or lost history dir must not kill
+                        // a days-long watchdog: log it and try again next
+                        // cycle instead.
+                        tracing::error!(error = format!("{e:#}"), "watch cycle failed");
+                        let note =
+                            format!("[cycle {cycle}] checks failed: {e:#} — retrying next cycle");
+                        if machine {
+                            eprintln!("{note}");
+                        } else {
+                            println!("{note}");
+                        }
+                        watch_failed = true;
+                        tokio::select! {
+                            () = tokio::time::sleep(interval) => continue,
+                            _ = tokio::signal::ctrl_c() => {
+                                interrupted = true;
+                                break;
+                            }
+                        }
+                    }
+                };
+                let prior_by_url = load_prior_by_url(&settings.history_dir, &runs);
+                // A breach is a breach regardless of output shape — the
+                // exit code (and notifications below) must not depend on
+                // whether a human or a machine is watching.
+                let breached = runs
+                    .iter()
+                    .any(|r| run_breaches(r, settings.fail_on, settings.baseline.as_ref()));
+                watch_failed |= breached;
+                if json {
+                    // Compact, not pretty: exactly one line per cycle so
+                    // the stream is valid JSONL.
+                    println!("{}", serde_json::to_string(&runs)?);
+                } else if junit || sarif || csv {
+                    emit_structured(
+                        &runs,
+                        junit,
+                        sarif,
+                        csv,
+                        out.clone(),
+                        settings.baseline.as_ref(),
+                    )?;
+                } else {
+                    let (pass, warn, fail) = summarize_cycle(&runs);
+                    println!(
+                        "[cycle {cycle} {}] {} form(s): {pass} pass, {warn} warn, {fail} fail ({:?})",
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                        runs.len(),
+                        cycle_started.elapsed(),
+                    );
+                    for run in &runs {
+                        if run_breaches(run, settings.fail_on, settings.baseline.as_ref()) {
+                            print_run(
+                                prior_by_url.get(&run.url).map(Vec::as_slice).unwrap_or(&[]),
+                                run,
+                                false,
+                                settings.fail_on,
+                                settings.baseline.as_ref(),
+                            )?;
+                        }
+                    }
+                }
+                notify_runs(&settings, &runs, &prior_by_url).await;
+                github_issues_for_runs(&settings, &runs, &prior_by_url).await;
+                if let Some(max) = max_cycles
+                    && cycle >= max
+                {
+                    break;
+                }
+                tokio::select! {
+                    () = tokio::time::sleep(interval) => {},
+                    _ = tokio::signal::ctrl_c() => {
+                        interrupted = true;
+                        let note = format!("Stopped after {cycle} cycle(s).");
+                        if machine {
+                            eprintln!("{note}");
+                        } else {
+                            println!("{note}");
+                        }
+                        break;
+                    }
+                }
+            }
+            // A user interrupt is a clean stop, not a failure; a bounded
+            // `--max-cycles` run reports breaches through the exit code.
+            if !interrupted {
+                any_fail |= watch_failed;
+            }
+        }
         Command::Report {
             html,
             json,
             junit,
             sarif,
             prometheus,
+            csv,
+            markdown,
             out,
         } => {
             let runs = history::all_known_forms(&settings_history_dir(&globals, &config))?;
@@ -773,6 +1250,12 @@ async fn main() -> Result<()> {
             } else if prometheus {
                 default_name = None;
                 Some(metrics::render(&runs))
+            } else if csv {
+                default_name = Some(PathBuf::from("formwatch-report.csv"));
+                Some(export::csv(&runs, baseline.as_ref()))
+            } else if markdown {
+                default_name = Some(PathBuf::from("formwatch-report.md"));
+                Some(export::markdown(&runs, baseline.as_ref()))
             } else {
                 default_name = None;
                 None
@@ -787,6 +1270,276 @@ async fn main() -> Result<()> {
                 },
                 None => print_report(&settings_history_dir(&globals, &config))?,
             }
+        }
+        Command::Audit { verify, show, json } => {
+            audit_command(&globals, &config, verify, show, json)?;
+        }
+        Command::Validate {
+            configs,
+            probe,
+            json,
+        } => {
+            let mut paths = vec![];
+            for p in &configs {
+                if p.as_os_str() == "forms.yml" && !p.exists() {
+                    // Match `monitor`'s friendliness: the default file is
+                    // optional, an explicit one is an error.
+                    continue;
+                }
+                paths.push(p.clone());
+            }
+            if paths.is_empty() {
+                println!("No registry files found (default: forms.yml).");
+            } else {
+                let issues = validate::validate_files(&paths);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &issues
+                                .iter()
+                                .map(
+                                    |i| serde_json::json!({"level": i.level, "message": i.message})
+                                )
+                                .collect::<Vec<_>>()
+                        )?
+                    );
+                } else if issues.is_empty() {
+                    println!("{} registry file(s) look good.", paths.len());
+                } else {
+                    for issue in &issues {
+                        println!("[{}] {}", issue.level.to_uppercase(), issue.message);
+                    }
+                }
+                any_fail |= issues.iter().any(|i| i.level == "error");
+                if probe {
+                    let urls = validate::http_urls_in(&paths);
+                    let probed = validate::probe_urls(&urls).await;
+                    let down: Vec<&str> = probed
+                        .iter()
+                        .filter(|p| !p.reachable)
+                        .map(|p| p.url.as_str())
+                        .collect();
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &probed
+                                    .iter()
+                                    .map(|p| serde_json::json!({
+                                        "url": p.url, "reachable": p.reachable, "status": p.status,
+                                    }))
+                                    .collect::<Vec<_>>()
+                            )?
+                        );
+                    } else if down.is_empty() {
+                        println!("Probe: {} URL(s) reachable.", probed.len());
+                    } else {
+                        for u in &down {
+                            println!("[UNREACHABLE] {u}");
+                        }
+                    }
+                    any_fail |= !down.is_empty();
+                }
+            }
+        }
+        Command::Trends {
+            last_n,
+            min_pass_rate,
+            json,
+        } => {
+            if let Some(r) = min_pass_rate
+                && !(0.0..=1.0).contains(&r)
+            {
+                bail!("--min-pass-rate must be between 0.0 and 1.0, got {r}");
+            }
+            let history_dir = settings_history_dir(&globals, &config);
+            let trends = insights::all_trends(&history_dir, last_n.unwrap_or(0));
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &trends
+                            .iter()
+                            .map(|t| serde_json::json!({
+                                "name": t.name, "url": t.url, "runs": t.runs,
+                                "pass_rate": t.pass_rate, "current": t.current.label(),
+                                "flaky": t.flaky.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                            }))
+                            .collect::<Vec<_>>()
+                    )?
+                );
+            } else {
+                print!("{}", insights::render_trends_text(&trends));
+            }
+            if let Some(min) = min_pass_rate
+                && trends.iter().any(|t| t.pass_rate < min)
+            {
+                any_fail = true;
+            }
+        }
+        Command::Flakes { json } => {
+            let history_dir = settings_history_dir(&globals, &config);
+            let mut flaky: Vec<(String, history::Flakiness)> = vec![];
+            for form in history::all_known_forms(&history_dir)? {
+                let runs = history::load_runs(&history_dir, &form.url)?;
+                for f in history::flakiness(&runs) {
+                    if f.is_flaky() {
+                        flaky.push((form.name.clone(), f));
+                    }
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &flaky
+                            .iter()
+                            .map(|(form, f)| serde_json::json!({
+                                "form": form, "check": f.name,
+                                "transitions": f.transitions, "current": f.current.label(),
+                            }))
+                            .collect::<Vec<_>>()
+                    )?
+                );
+            } else if flaky.is_empty() {
+                println!("No flaky checks — every check is stable across its history.");
+            } else {
+                for (form, f) in &flaky {
+                    println!(
+                        "FLAKY {form}: {} ({} transitions, now {})",
+                        f.name,
+                        f.transitions,
+                        f.current.label()
+                    );
+                }
+            }
+            any_fail |= !flaky.is_empty();
+        }
+        Command::Diff { target, json } => {
+            let history_dir = settings_history_dir(&globals, &config);
+            let runs = insights::history_for(&history_dir, &target);
+            if runs.len() < 2 {
+                bail!(
+                    "not enough history for {target:?}: need 2 runs, found {}",
+                    runs.len()
+                );
+            }
+            let (prev, curr) = (&runs[runs.len() - 2], &runs[runs.len() - 1]);
+            let changes = history::diff(prev, curr);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &changes
+                            .iter()
+                            .map(|c| serde_json::json!({
+                                "check": c.name, "from": c.from.label(), "to": c.to.label(),
+                            }))
+                            .collect::<Vec<_>>()
+                    )?
+                );
+            } else if changes.is_empty() {
+                println!("No status changes between the last two runs of {target}.");
+            } else {
+                for c in &changes {
+                    println!("{}: {} -> {}", c.name, c.from.label(), c.to.label());
+                }
+            }
+            any_fail |= changes.iter().any(|c| c.to == checks::Status::Fail);
+        }
+        Command::History {
+            target,
+            last_n,
+            json,
+        } => {
+            let history_dir = settings_history_dir(&globals, &config);
+            let mut runs = insights::history_for(&history_dir, &target);
+            if let Some(n) = last_n
+                && runs.len() > n
+            {
+                runs = runs[runs.len() - n..].to_vec();
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&runs)?);
+            } else {
+                print!("{}", insights::render_history_text(&runs));
+            }
+        }
+        Command::Export { format, out } => {
+            let history_dir = settings_history_dir(&globals, &config);
+            let runs = insights::dump_all(&history_dir);
+            let body = match format.as_str() {
+                "jsonl" => insights::export_jsonl(&runs),
+                "json" => serde_json::to_string_pretty(&runs)?,
+                "csv" => insights::export_csv(&runs),
+                other => bail!("unknown --format {other:?}: expected 'jsonl', 'json', or 'csv'"),
+            };
+            match out {
+                Some(path) => {
+                    write_output(&path, &body)?;
+                    println!("Wrote {} ({} run(s))", path.display(), runs.len());
+                }
+                None => print!("{body}"),
+            }
+        }
+        Command::Sitemap {
+            url,
+            max_urls,
+            check_forms,
+            json,
+        } => {
+            let max = max_urls.unwrap_or(200);
+            if max == 0 {
+                bail!("--max-urls must be greater than zero");
+            }
+            let pages = sitemap::discover_from_arg(&url, max).await?;
+            if json {
+                if check_forms {
+                    let found = sitemap::filter_to_forms(&pages).await;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &found
+                                .iter()
+                                .map(|(p, a)| serde_json::json!({"page": p, "actions": a}))
+                                .collect::<Vec<_>>()
+                        )?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&pages)?);
+                }
+            } else if check_forms {
+                let found = sitemap::filter_to_forms(&pages).await;
+                if found.is_empty() {
+                    println!("Checked {} page(s): no <form> elements found.", pages.len());
+                } else {
+                    for (page, actions) in &found {
+                        println!("{page}");
+                        for a in actions {
+                            println!("  -> {a}");
+                        }
+                    }
+                }
+            } else {
+                for p in &pages {
+                    println!("{p}");
+                }
+                eprintln!(
+                    "{} candidate page(s). Re-run with --check-forms to keep only pages containing a <form>.",
+                    pages.len()
+                );
+            }
+        }
+        Command::Ci {
+            forms,
+            schedule,
+            out,
+        } => {
+            let body = ci::github_workflow(&forms, &schedule);
+            let path = out.unwrap_or_else(|| PathBuf::from(".github/workflows/formwatch.yml"));
+            write_output(&path, &body)?;
+            println!("Wrote {}", path.display());
         }
     }
 
@@ -876,6 +1629,8 @@ fn resolve(
                     .unwrap_or(20),
             ),
             llm: build_llm_options(&globals.llm, config.llm.as_ref()),
+            skip_vuln: globals.skip_vuln,
+            max_load_ms: globals.max_load_ms.or(config.max_load_ms),
         },
         browser: BrowserOptions {
             headful,
@@ -885,6 +1640,7 @@ fn resolve(
             request_timeout: None,
         },
         open: OpenOptions::default(),
+        retries: globals.retries.or(config.retries).unwrap_or(0),
         delay_ms,
         per_host_delay_ms: globals
             .per_host_delay_ms
@@ -1057,6 +1813,82 @@ fn baseline_command(
                 entry.check
             );
         }
+    }
+    Ok(())
+}
+
+/// `formwatch audit`: verify the tamper-evident hash chain, or show the
+/// most recent entries. Verification exits non-zero when the chain is
+/// broken so CI can gate on it.
+fn audit_command(
+    globals: &Globals,
+    config: &Config,
+    verify: bool,
+    show: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let Some(path) = globals
+        .audit_log
+        .clone()
+        .or_else(|| config.audit_log.clone())
+    else {
+        bail!("no audit log configured — pass --audit-log FILE or set audit_log in config");
+    };
+    if verify {
+        let report = audit::verify(&path)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": path.display().to_string(),
+                    "entries": report.entries,
+                    "v2_entries": report.v2_entries,
+                    "legacy_entries": report.legacy_entries,
+                    "ok": report.ok,
+                    "broken_at": report.broken_at,
+                    "reason": report.reason,
+                }))?
+            );
+        } else if report.ok {
+            println!(
+                "Audit chain OK: {} entrie(s) verify ({} v2, {} legacy) in {}",
+                report.entries,
+                report.v2_entries,
+                report.legacy_entries,
+                path.display()
+            );
+        } else {
+            eprintln!(
+                "Audit chain BROKEN at line {}: {}",
+                report.broken_at.unwrap_or(0),
+                report.reason.as_deref().unwrap_or("unknown reason")
+            );
+        }
+        if !report.ok {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    let n = show.unwrap_or(10);
+    let entries = audit::tail(&path, n)?;
+    if entries.is_empty() {
+        println!("No audit entries yet in {}.", path.display());
+        return Ok(());
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+    for v in &entries {
+        let ts = v.get("timestamp").and_then(|t| t.as_i64()).unwrap_or(0);
+        let when = chrono::DateTime::from_timestamp(ts, 0)
+            .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| ts.to_string());
+        let outcome = v.get("outcome").and_then(|o| o.as_str()).unwrap_or("?");
+        let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("?");
+        let actor = v.get("actor").and_then(|a| a.as_str()).unwrap_or("?");
+        let host = v.get("hostname").and_then(|h| h.as_str()).unwrap_or("?");
+        println!("[{when}] {outcome} {url} (by {actor} on {host})");
     }
     Ok(())
 }
@@ -1294,6 +2126,129 @@ async fn github_issues_for_runs(
 /// against third-party sites this tool doesn't control. A plain
 /// `buffer_unordered(N)` alone doesn't pace anything: it happily starts
 /// all N immediately, then refills as each one finishes.
+/// True when `run` never actually loaded the page: the single `Page
+/// load` Fail check the runner emits instead of real results. Only these
+/// runs are worth retrying — a form that loads but fails checks produced
+/// a genuine verdict, and re-probing a third-party site for it would just
+/// add load without new information.
+fn is_load_failure(run: &history::RunResult) -> bool {
+    run.checks.len() == 1
+        && run.checks[0].name == "Page load"
+        && run.checks[0].status == checks::Status::Fail
+}
+
+/// One full pass over every configured form: concurrent per-form runs
+/// returned in config order, plus one audit entry per run recorded under
+/// `command`. The engine shared by `monitor` (called once) and each
+/// `watch` cycle. A form whose check fails to execute is logged and
+/// skipped — never fatal to the pass (an audit-write failure still
+/// aborts, as before, so a silent audit gap can't masquerade as clean
+/// history).
+async fn check_all_forms(
+    settings: &Settings,
+    command: &str,
+    entries: &[FormEntry],
+    browser: &chromiumoxide::Browser,
+    pacer: &HostPacer,
+    llm_client: Option<&LlmClient>,
+) -> Result<Vec<history::RunResult>> {
+    let run_opts = &settings.run;
+    let open_opts = &settings.open;
+    let checks_dir_ref = settings.checks_dir.as_deref();
+    let history_dir = &settings.history_dir;
+
+    let mut indexed: Vec<(usize, history::RunResult)> = paced(
+        stream::iter(entries.iter().cloned().enumerate()),
+        Duration::from_millis(settings.delay_ms),
+    )
+    .map(|(i, entry)| async move {
+        if let Some(host) = host_of(&entry.url) {
+            pacer.wait_turn(&host).await;
+        }
+        // Flake-aware retries: a page that never loads (DNS blip, slow
+        // government CDN) is retried with backoff; a loaded page with
+        // failing checks is a real verdict and is kept as-is.
+        let mut attempt = 0u32;
+        loop {
+            match runner::run_one_with(
+                browser,
+                history_dir,
+                entry.name.clone(),
+                entry.url.clone(),
+                run_opts,
+                open_opts,
+                checks_dir_ref,
+                llm_client,
+            )
+            .await
+            {
+                Ok(run) => {
+                    if is_load_failure(&run) && attempt < settings.retries {
+                        attempt += 1;
+                        tracing::warn!(
+                            form = %entry.name,
+                            attempt,
+                            "page load failed; retrying"
+                        );
+                        tokio::time::sleep(Duration::from_secs(2u64.pow(attempt.min(4)))).await;
+                        continue;
+                    }
+                    break Some((i, run));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        form = %entry.name,
+                        error = format!("{e:#}"),
+                        "form check failed"
+                    );
+                    break None;
+                }
+            }
+        }
+    })
+    .buffer_unordered(settings.max_concurrent.max(1))
+    .filter_map(|x| async move { x })
+    .collect()
+    .await;
+    indexed.sort_by_key(|(i, _)| *i);
+    let runs: Vec<history::RunResult> = indexed.into_iter().map(|(_, r)| r).collect();
+
+    // One audit entry per run; duration is per-invocation here
+    // (concurrent forms share the wall clock), so record 0 and
+    // let the per-form detail live in history instead.
+    let fail_on = match settings.fail_on {
+        FailOn::Fail => "fail",
+        FailOn::Warn => "warn",
+    };
+    for run in &runs {
+        if let Some(path) = &settings.audit_log {
+            let ctx = audit::AuditContext::capture(command, 0, settings.run.allow_submit, fail_on);
+            audit::append_with_context(path, run, &ctx)?;
+        }
+    }
+    Ok(runs)
+}
+
+/// Tallies one pass over forms by worst status per run: a run with any
+/// `Fail` counts as failed even if it also warns, and one with no
+/// failures but a `Warn` counts as warned. Returns
+/// `(pass, warn, fail)`.
+fn summarize_cycle(runs: &[history::RunResult]) -> (usize, usize, usize) {
+    let mut pass = 0;
+    let mut warn = 0;
+    let mut fail = 0;
+    for run in runs {
+        if run.checks.iter().any(|c| c.status == checks::Status::Fail) {
+            fail += 1;
+        } else if run.checks.iter().any(|c| c.status == checks::Status::Warn) {
+            warn += 1;
+        } else {
+            pass += 1;
+        }
+    }
+    (pass, warn, fail)
+}
+
 fn paced<S: stream::Stream>(source: S, delay: Duration) -> impl stream::Stream<Item = S::Item> {
     source.then(move |item| async move {
         if !delay.is_zero() {
@@ -1355,19 +2310,22 @@ fn run_breaches(run: &history::RunResult, fail_on: FailOn, baseline: Option<&Bas
         .any(|c| baseline::check_breaches(run, c, fail_on, baseline))
 }
 
-/// Renders `runs` as JUnit XML or SARIF and writes it to `out` (stdout when
-/// none) — the `--junit`/`--sarif` output for `test`/`monitor`. Baseline-aware.
+/// Renders `runs` as JUnit XML, SARIF, or CSV and writes it to `out`
+/// (stdout when none) — the `--junit`/`--sarif`/`--csv` output for
+/// `test`/`monitor`. Baseline-aware.
 fn emit_structured(
     runs: &[history::RunResult],
     junit: bool,
     sarif: bool,
+    csv: bool,
     out: Option<PathBuf>,
     baseline: Option<&Baseline>,
 ) -> Result<()> {
-    let body = match (junit, sarif) {
-        (true, _) => export::junit_xml(runs, baseline),
-        (false, true) => serde_json::to_string_pretty(&export::sarif_json(runs, baseline))?,
-        (false, false) => String::new(),
+    let body = match (junit, sarif, csv) {
+        (true, _, _) => export::junit_xml(runs, baseline),
+        (false, true, _) => serde_json::to_string_pretty(&export::sarif_json(runs, baseline))?,
+        (false, false, true) => export::csv(runs, baseline),
+        (false, false, false) => String::new(),
     };
     match out {
         Some(path) => {
@@ -1740,5 +2698,31 @@ mod tests {
             delay * 3,
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn watch_json_is_one_line_per_cycle() {
+        // `watch --json` promises JSONL: exactly one line per cycle, so
+        // a machine can split on newlines and parse each line. Pretty
+        // printing would break that contract with embedded newlines.
+        let runs = vec![run(vec![check(Status::Pass), check(Status::Warn)])];
+        let line = serde_json::to_string(&runs).expect("serialize");
+        assert!(!line.contains('\n'), "must be a single line");
+        let back: Vec<history::RunResult> =
+            serde_json::from_str(line.trim()).expect("must parse back");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].checks.len(), 2);
+    }
+
+    #[test]
+    fn summarize_cycle_tallies_runs_by_worst_status() {
+        // One line per cycle is the whole point of `watch` output, so
+        // the tally it prints gets its own test: a run counts once, by
+        // its worst check (a Fail beats a Warn on the same run).
+        let all_pass = run(vec![check(Status::Pass), check(Status::Pass)]);
+        let warned = run(vec![check(Status::Pass), check(Status::Warn)]);
+        let failed = run(vec![check(Status::Warn), check(Status::Fail)]);
+        assert_eq!(summarize_cycle(&[all_pass, warned, failed]), (1, 1, 1));
+        assert_eq!(summarize_cycle(&[]), (0, 0, 0));
     }
 }

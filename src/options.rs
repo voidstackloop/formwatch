@@ -24,6 +24,11 @@ pub struct RunOptions {
     pub check_timeout: Duration,
     /// Optional LLM-powered semantic checks (`--llm`).
     pub llm: Option<LlmOptions>,
+    /// Skip the passive vulnerability checks (`--skip-vuln`).
+    pub skip_vuln: bool,
+    /// Fail (breach) when a form's wall-clock run time exceeds this many
+    /// milliseconds (`--max-load-ms`). `None` disables the budget.
+    pub max_load_ms: Option<u64>,
 }
 
 impl Default for RunOptions {
@@ -34,6 +39,8 @@ impl Default for RunOptions {
             screenshots: true,
             check_timeout: Duration::from_secs(20),
             llm: None,
+            skip_vuln: false,
+            max_load_ms: None,
         }
     }
 }

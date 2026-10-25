@@ -1,4 +1,4 @@
-use crate::{browser, checks, history, options};
+use crate::{browser, checks, history, options, vuln};
 use anyhow::Result;
 use chromiumoxide::Browser;
 use std::path::Path;
@@ -58,8 +58,15 @@ pub async fn run_one_with(
     checks_dir: Option<&Path>,
     llm_client: Option<&crate::llm::LlmClient>,
 ) -> Result<history::RunResult> {
-    let checks = match browser::open_with(browser, &url, open_opts).await {
-        Ok(page) => {
+    let started = std::time::Instant::now();
+    let checks = match browser::open_with_capture(browser, &url, open_opts).await {
+        Ok((page, capture)) => {
+            // Feed the header/cookie checks the browser's own view of
+            // this load (CDP capture), so they analyze exactly what
+            // Chrome received instead of re-requesting the page.
+            if let Some(doc) = &capture {
+                vuln::seed_capture(doc);
+            }
             let mut checks = checks::run_all_with(&page, opts).await;
             if let Some(dir) = checks_dir {
                 match checks::run_custom_checks_with(&page, dir, opts).await {
@@ -78,6 +85,24 @@ pub async fn run_one_with(
                 );
             }
             let _ = page.close().await;
+            // Performance budget: a form can be "up" yet too slow to
+            // complete. The budget is a synthetic check (not part of the
+            // check engine) so history/`--json` consumers see it like any
+            // other result, and `--fail-on`/`--baseline` apply uniformly.
+            if let Some(budget_ms) = opts.max_load_ms {
+                let elapsed_ms = started.elapsed().as_millis();
+                let status = if elapsed_ms <= u128::from(budget_ms) {
+                    checks::Status::Pass
+                } else {
+                    checks::Status::Fail
+                };
+                checks.push(checks::CheckResult {
+                    name: "Load budget".to_string(),
+                    status,
+                    detail: format!("run took {elapsed_ms}ms (budget {budget_ms}ms)"),
+                    screenshot: None,
+                });
+            }
             checks
         }
         Err(e) => vec![checks::CheckResult {

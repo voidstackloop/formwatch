@@ -33,6 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "json", "ansi"] }
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 regex = "1"
+sha2 = "0.10"
 
 # Faster release binaries for a tool that ships prebuilt; no effect on
 # correctness. `panic = "abort"` is deliberately NOT set: formwatch

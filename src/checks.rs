@@ -1,4 +1,5 @@
 use crate::options::RunOptions;
+use crate::vuln;
 use anyhow::{Context, Result};
 use chromiumoxide::Page;
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
@@ -1418,7 +1419,7 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
         let _ = fill_form_fields(page).await;
     }
 
-    vec![
+    let mut results = vec![
         run_safely(
             page,
             "Bot protection",
@@ -1516,7 +1517,64 @@ pub async fn run_all_with(page: &Page, opts: &RunOptions) -> Vec<CheckResult> {
             check_input_persistence(page, wait_secs),
         )
         .await,
-    ]
+    ];
+    // Passive vulnerability checks ride along with every run so `test`,
+    // `monitor`, reports, and exports all see them; `--skip-vuln` opts
+    // back out (e.g. when only UX checks are wanted or the extra
+    // header-fetch request is unwelcome).
+    if !opts.skip_vuln {
+        results.push(
+            run_safely(
+                page,
+                "Insecure transport",
+                check_timeout,
+                capture,
+                vuln::check_insecure_transport(page),
+            )
+            .await,
+        );
+        results.push(
+            run_safely(
+                page,
+                "Form data protection",
+                check_timeout,
+                capture,
+                vuln::check_form_data_protection(page),
+            )
+            .await,
+        );
+        results.push(
+            run_safely(
+                page,
+                "Security headers",
+                check_timeout,
+                capture,
+                vuln::check_security_headers(page),
+            )
+            .await,
+        );
+        results.push(
+            run_safely(
+                page,
+                "Cookie security",
+                check_timeout,
+                capture,
+                vuln::check_cookie_security(page),
+            )
+            .await,
+        );
+        results.push(
+            run_safely(
+                page,
+                "Information disclosure",
+                check_timeout,
+                capture,
+                vuln::check_information_disclosure(page),
+            )
+            .await,
+        );
+    }
+    results
 }
 
 /// Runs every `*.js` file in `dir` against the page through the same

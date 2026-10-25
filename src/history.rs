@@ -73,8 +73,12 @@ fn dir_for(base: &Path, url: &str) -> PathBuf {
 /// Returns the path it was written to. Never overwrites an existing run:
 /// if a file for this exact timestamp already exists, appends a `-N`
 /// suffix instead, so two runs completing within the same wall-clock
-/// second don't silently clobber each other.
+/// second don't silently clobber each other. The existence check and
+/// the write are one atomic `create_new` step, so two processes saving
+/// the same timestamp concurrently get distinct files instead of one
+/// overwriting the other between the check and the write.
 pub fn save_run(base: &Path, run: &RunResult) -> Result<PathBuf> {
+    use std::io::{ErrorKind, Write};
     let dir = dir_for(base, &run.url);
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
 
@@ -82,15 +86,30 @@ pub fn save_run(base: &Path, run: &RunResult) -> Result<PathBuf> {
     // same wall-clock second (plausible for a fast local fixture, or a
     // tight test/dev loop) would otherwise collide on the same filename
     // and the second write would silently clobber the first.
-    let mut path = dir.join(format!("{}.json", run.timestamp));
-    let mut suffix = 1;
-    while path.exists() {
-        path = dir.join(format!("{}-{suffix}.json", run.timestamp));
-        suffix += 1;
+    let body = serde_json::to_string_pretty(run)?;
+    let mut suffix = 0u32;
+    loop {
+        let path = if suffix == 0 {
+            dir.join(format!("{}.json", run.timestamp))
+        } else {
+            dir.join(format!("{}-{suffix}.json", run.timestamp))
+        };
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(body.as_bytes())
+                    .with_context(|| format!("writing {}", path.display()))?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => suffix += 1,
+            Err(e) => {
+                return Err(e).with_context(|| format!("writing {}", path.display()));
+            }
+        }
     }
-
-    fs::write(&path, serde_json::to_string_pretty(run)?)?;
-    Ok(path)
 }
 
 /// All runs for this URL, oldest first.
@@ -707,6 +726,34 @@ mod tests {
         let remaining = load_runs(&dir, "https://city.gov/a").expect("load");
         assert_eq!(remaining.len(), 2);
         assert_eq!(remaining[0].timestamp, 3, "the two newest survive");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_saves_with_the_same_timestamp_never_clobber() {
+        // The exists-check-then-write sequence used to race: two writers
+        // saving the same timestamp at once picked the same filename and
+        // one overwrote the other. create_new makes the reservation
+        // atomic, so every writer lands its own `-N` file.
+        use std::sync::Barrier;
+        let dir = std::env::temp_dir().join("formwatch-test-save-race");
+        let _ = fs::remove_dir_all(&dir);
+        let threads = 8;
+        let barrier = Barrier::new(threads);
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(|| {
+                    barrier.wait();
+                    save_run(&dir, &run_at("https://city.gov/a", 99)).expect("save");
+                });
+            }
+        });
+        let runs = load_runs(&dir, "https://city.gov/a").expect("load");
+        assert_eq!(
+            runs.len(),
+            threads,
+            "every concurrent save must survive as its own file"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

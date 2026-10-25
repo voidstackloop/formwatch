@@ -23,6 +23,9 @@ pub enum Error {
     /// A regression notification couldn't be delivered.
     #[error("notification error: {0}")]
     Notify(String),
+    /// An audit-log operation failed (corrupt line, broken chain).
+    #[error("audit error: {0}")]
+    Audit(String),
     /// An LLM-backed semantic check failed (configuration, transport, or an
     /// unparseable reply).
     #[error("LLM error: {0}")]

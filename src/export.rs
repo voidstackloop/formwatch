@@ -204,6 +204,78 @@ pub fn sarif_json(runs: &[RunResult], baseline: Option<&Baseline>) -> serde_json
     })
 }
 
+/// One CSV cell: quoted only when it must be (comma, quote, newline),
+/// with embedded quotes doubled per RFC 4180. Newlines inside a detail
+/// become spaces so one check stays on one row for line-based tools.
+fn csv_cell(s: &str) -> String {
+    let flat: String = s
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    if flat.contains([',', '"', '\n']) {
+        format!("\"{}\"", flat.replace('"', "\"\""))
+    } else {
+        flat
+    }
+}
+
+/// Renders `runs` as Markdown — one section per form with a check table —
+/// for pasting into issues, wikis, and status updates. Baseline-accepted
+/// findings are marked in the table rather than dropped.
+pub fn markdown(runs: &[RunResult], baseline: Option<&Baseline>) -> String {
+    let mut out = String::from("# formwatch report\n\n");
+    for run in runs {
+        out.push_str(&format!("## {} ({})\n\n", run.name, run.url));
+        out.push_str("| Check | Status | Baselined | Detail |\n");
+        out.push_str("| --- | --- | --- | --- |\n");
+        for check in &run.checks {
+            let accepted = check.status != Status::Pass
+                && baseline
+                    .map(|b| b.is_accepted(&run.url, &check.name, check.status))
+                    .unwrap_or(false);
+            let detail = check.detail.replace('|', "\\|").replace('\n', " ");
+            out.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                check.name,
+                check.status.label(),
+                if accepted { "yes" } else { "no" },
+                detail
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Renders `runs` as CSV — one row per check — for spreadsheets and
+/// line-based pipelines (`csvgrep`, `mlr`, Excel). Baseline-accepted
+/// findings are flagged in the `baselined` column rather than dropped,
+/// so an allow-list stays visible in the export.
+///
+/// Columns: `form,url,check,status,baselined,timestamp,detail`.
+pub fn csv(runs: &[RunResult], baseline: Option<&Baseline>) -> String {
+    let mut out = String::from("form,url,check,status,baselined,timestamp,detail\n");
+    for run in runs {
+        for check in &run.checks {
+            let accepted = check.status != Status::Pass
+                && baseline
+                    .map(|b| b.is_accepted(&run.url, &check.name, check.status))
+                    .unwrap_or(false);
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{}\n",
+                csv_cell(&run.name),
+                csv_cell(&run.url),
+                csv_cell(&check.name),
+                check.status.label(),
+                if accepted { "true" } else { "false" },
+                run.timestamp,
+                csv_cell(&check.detail),
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +355,50 @@ mod tests {
         assert!(levels.contains(&"error"));
         assert!(levels.contains(&"warning"));
         assert_eq!(results[0]["ruleId"], "formwatch/accessibility");
+    }
+
+    #[test]
+    fn csv_has_one_row_per_check_with_a_header() {
+        let body = csv(&[run()], None);
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines[0], "form,url,check,status,baselined,timestamp,detail");
+        assert_eq!(lines.len(), 4, "header + 3 checks: {body}");
+        assert!(body.contains(",Accessibility,FAIL,false,0,"), "{body}");
+        assert!(body.contains(",Autofill hints,PASS,false,0,"), "{body}");
+    }
+
+    #[test]
+    fn csv_quotes_cells_with_commas_and_flags_baselined_rows() {
+        let baseline = Baseline {
+            schema_version: crate::baseline::BASELINE_SCHEMA_VERSION,
+            generated_at: 0,
+            entries: vec![crate::baseline::Entry {
+                url: "https://city.gov/permit?x=1&y=2".into(),
+                name: "Permit".into(),
+                check: "Accessibility".into(),
+                status: Status::Fail,
+            }],
+        };
+        let body = csv(&[run()], Some(&baseline));
+        // The detail "2 violations" has no comma; craft one that does.
+        let tricky = RunResult {
+            checks: vec![check("Labels", Status::Warn, "a, b \"quoted\"")],
+            ..run()
+        };
+        let tricky_body = csv(&[tricky], None);
+        assert!(
+            tricky_body.contains("\"a, b \"\"quoted\"\"\""),
+            "commas/quotes must be RFC-4180 quoted: {tricky_body}"
+        );
+        assert!(body.contains(",Accessibility,FAIL,true,"), "{body}");
+    }
+
+    #[test]
+    fn markdown_renders_a_table_per_form() {
+        let body = markdown(&[run()], None);
+        assert!(body.starts_with("# formwatch report"));
+        assert!(body.contains("| Check | Status | Baselined | Detail |"));
+        assert!(body.contains("| Accessibility | FAIL | no | 2 violations |"));
     }
 
     #[test]

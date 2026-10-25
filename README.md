@@ -149,6 +149,54 @@ your own use.
   skips the field can submit incomplete data with no error at all — not
   what axe-core's label rule checks (that's about a label *existing*,
   not about a required-looking one being honored).
+- **Insecure transport** — flags the form page served over HTTP, a form
+  `action` pointing at HTTP, HTTP subresources on an HTTPS page (mixed
+  content), and — as `CRITICAL` — a password field anywhere in that
+  picture. Fails the run: credentials and submissions travel in
+  cleartext.
+- **Form data protection** — flags sensitive fields (password, SSN-like,
+  card-like, email) submitted with `method=GET` (values leak into URLs,
+  history, and server logs), POST forms with no anti-CSRF token, sensitive
+  fields with autocomplete left on, and `target=_blank` links without
+  `rel=noopener` (tabnabbing). Warns: the CSRF signal is heuristic (the
+  app may rely on SameSite cookies instead) and says so.
+- **Security headers** — fetches the page's response headers once (one
+  plain GET, no payloads) and flags a missing Content-Security-Policy
+  (or a present-but-permissive one: `unsafe-inline`/`unsafe-eval`/
+  wildcard script sources), missing clickjacking protection
+  (`X-Frame-Options` or CSP `frame-ancestors`), missing HSTS on HTTPS
+  pages, missing `X-Content-Type-Options`, a missing or explicitly
+  `unsafe-url` Referrer-Policy, and version-disclosing `Server`/
+  `X-Powered-By` banners. Warns: hardening gaps, each with the exact
+  header to send.
+- **Cookie security** — parses every `Set-Cookie` (names and flags only;
+  values are never stored) and flags cookies missing `Secure` on HTTPS,
+  missing `HttpOnly`, `SameSite=None` without `Secure`, missing
+  `SameSite`, and `__Secure`-/`__Host`-prefix contracts the attributes
+  don't honor. Warns (transport already fails the run when the page
+  itself is HTTP, so `Secure` findings stay silent there instead of
+  repeating it per cookie).
+- **Information disclosure** — flags verbose error wording on the page
+  (stack traces, SQL errors, debug output), HTML comments mentioning
+  secrets, keys, tokens, or credential TODOs, and sensitive values
+  sitting in the page URL's query string (`password=`, `token=`, ...;
+  percent-encoded keys don't slip past). Warns.
+
+All six vulnerability checks are fully passive — DOM, URL, and response
+headers only, no attack payloads, fuzzing, or forced browsing — so they
+run safely against third-party forms you're authorized to read. Headers
+and cookie flags come from the browser's own page load, captured over
+CDP as the page opens (same TLS session, user agent, and cookies the
+checks ran against) and shared between the header, cookie, and
+disclosure checks — zero extra requests per form. A plain one-request
+GET is only a fallback for pages opened without capture. Every finding carries a
+stable id (`FW-V001`–`FW-V021`), a CWE reference, and a confidence
+rating (`high`/`medium`/`low`) so triagers can tell directly-observed
+facts apart from heuristic guesses — a missing CSRF token, for example,
+only claims `medium` confidence because the app may rely on `SameSite`
+cookies instead. They run as part of every `test`/`monitor` invocation;
+pass `--skip-vuln` to opt back out, or run `formwatch vuln <url>` for a
+vulnerabilities-only scan with `--min-severity` triage filtering.
 
 ## Commands
 
@@ -156,8 +204,16 @@ your own use.
   `./forms.yml`) plus `checks/example.js`, a working example of the
   custom-check mechanism below.
 - `formwatch test <url> [--name NAME] [--submit] [--wait SECS] [--headful]
-  [--checks-dir DIR] [--json | --junit | --sarif] [--out FILE]` — run every
-  check once against a single form.
+  [--checks-dir DIR] [--json | --junit | --sarif] [--out FILE] [--skip-vuln]` — run every
+  check once against a single form (vulnerability checks included unless
+  `--skip-vuln`).
+- `formwatch vuln <url> [--name NAME] [--headful] [--json]
+  [--min-severity low|medium|high|critical]` — scan one
+  form for the six passive vulnerability checks above (stable finding
+  ids `FW-V001`–`FW-V021` with severity, CWE, confidence, detail, and
+  remediation) without running the UX checks or writing history.
+  `--min-severity` hides lower-severity findings for triage. Exits
+  non-zero when a finding breaches `--fail-on` (fail by default).
 - `formwatch monitor <forms.yml>... [--checks-dir DIR] [--json | --junit |
   --sarif] [--out FILE] [--delay-ms MS]` — run `test` against every form across one or more
   YAML configs (a shell glob like `community-forms/**/*.yml` works — the
@@ -177,8 +233,38 @@ your own use.
     - name: Business License Renewal
       url: https://city.gov/business-license
   ```
-- `formwatch report [--html | --json | --junit | --sarif | --prometheus]
-  [--out FILE]` — print (or render to HTML/JSON/JUnit XML/SARIF/Prometheus)
+- `formwatch validate [forms.yml...] [--probe] [--json]` — lint registries
+  without launching a browser: bad YAML, missing names/URLs, non-HTTP(S)
+  URLs, duplicate names/URLs, plain-http downgrades. Exits 1 on errors
+  (warnings don't fail). With `--probe`, also GETs each valid URL and
+  reports reachability (any HTTP response counts as reachable).
+  Run it in CI before `monitor`.
+- `formwatch trends [--last-n N] [--min-pass-rate R] [--json]` — pass-rate,
+  current status, and non-Pass streaks per form over history (default: all
+  runs). `--min-pass-rate` (0.0–1.0) exits 1 when any form falls below it,
+  so dashboards can gate on fleet health.
+- `formwatch flakes [--json]` — checks that keep flip-flopping (2+ status
+  transitions across history) instead of settling. Exits 1 when any flake
+  exists, so CI can gate on stability.
+- `formwatch diff <url-or-name> [--json]` — what changed between a form's
+  last two runs. Exits 1 when the latest run newly fails a check.
+- `formwatch history <url-or-name> [--last-n N] [--json]` — a form's
+  recorded runs (timestamp + pass/warn/fail counts), newest last.
+- `formwatch export --format jsonl|json|csv [--out FILE]` — dump *full*
+  history (every run of every form) for warehouses/dashboards: JSONL (one
+  run per line), pretty JSON array, or CSV (one row per check).
+- `formwatch sitemap <sitemap-url|site-root> [--max-urls N] [--check-forms]
+  [--json]` — discover candidate form pages. Pass a sitemap directly, or a
+  site root (consults `/robots.txt` `Sitemap:` entries plus `/sitemap.xml`);
+  an index is detected by content and followed one level. With
+  `--check-forms`, fetches each page and keeps only ones containing a
+  `<form>` with their action targets.
+- `formwatch ci [--forms forms.yml] [--schedule CRON] [--out FILE]` — write
+  a starter GitHub Actions workflow (default
+  `.github/workflows/formwatch.yml`) that validates then monitors on push,
+  PR, and schedule.
+- `formwatch report [--html | --json | --junit | --sarif | --prometheus | --markdown]
+  [--out FILE]` — print (or render to HTML/JSON/JUnit XML/SARIF/Prometheus/Markdown)
   the latest run of every form formwatch has recorded, including what
   changed since each form's previous run. JUnit XML feeds CI test
   dashboards; SARIF feeds code-scanning UIs like GitHub code scanning;
@@ -205,12 +291,37 @@ your own use.
   baseline of currently accepted findings from history (`--write`), or
   print the configured/current one. See
   [Baselines](#baselines-beyond-the-first-day).
-- `formwatch serve [--addr HOST:PORT]` — serve read-only HTTP endpoints
-  (`/healthz`, `/readyz`, `/metrics`, `/api/forms`) over the accumulated
-  history. See [Service mode](#service-mode).
+- `formwatch serve [--addr HOST:PORT] [--api-token TOKEN]` — serve read-only
+  HTTP endpoints (`/healthz`, `/readyz`, `/metrics`, `/api/forms`,
+  `/api/summary`, `/api/trends`, `/api/flakes`, `/badge.svg`) over the
+  accumulated history.
+  With a token (or `serve_api_token:` / `FORMWATCH_SERVE_API_TOKEN`), every
+  data endpoint requires `Authorization: Bearer <token>`; the probes stay
+  open. See [Service mode](#service-mode).
+- `formwatch audit [--verify] [--show N] [--json]` — inspect the
+  tamper-evident audit log: `--verify` recomputes its hash chain
+  (exit 1 when broken, so CI can gate on it), `--show N` prints the
+  last N entries.
 - `formwatch prune (--keep-last N | --keep-days D) [--dry-run]` — delete
   old history runs so a long-lived deployment doesn't grow forever. See
   [Retention](#retention).
+- `formwatch watch <forms.yml>... [--interval-secs N] [--max-cycles N]
+  [--delay-ms MS] [--json | --junit | --sarif | --csv] [--out FILE]` — keep
+  re-running `monitor` against every form on a schedule (default every
+  300s), watching for regressions until Ctrl+C.
+  Each cycle saves history (so `formwatch serve` stays live), notifies on
+  new regressions exactly like `monitor`, and prints a one-line
+  `[cycle N timestamp] M form(s): P pass, W warn, F fail (took …)` summary
+  — full detail only for runs that breach `--fail-on`. With an export
+  flag, stdout carries only the machine artifact instead: `--json` emits
+  one compact object per cycle (valid JSONL), the others reuse the
+  `monitor` renderers per cycle, and `--out` files are overwritten each
+  pass so they always hold the latest result. A failed cycle
+  (dead browser, lost history dir) is logged and retried next cycle,
+  never fatal to the watchdog. `--max-cycles` stops after N cycles and
+  reports breaches through the exit code (handy for CI smoke runs).
+  Interval also settable via `watch_interval_secs:` /
+  `FORMWATCH_WATCH_INTERVAL_SECS`. See [Watch mode](#watch-mode).
 - `formwatch demo [--addr HOST:PORT]` — serve a bundled demo site of
   deliberately varied forms (one clean, the rest each tripping a check) so
   you can see what formwatch catches. See
@@ -227,9 +338,11 @@ Every command also accepts these global flags:
   `--log-format text|json`, `--accept-terms`, `--no-screenshots`,
   `--proxy URL`, `--insecure`, `--no-sandbox`, `--audit-log FILE`,
   `--baseline FILE`, `--per-host-delay-ms MS`, `--max-concurrent N`,
-  `--shard INDEX/TOTAL`, `--check-timeout-secs SECS`, and
-  `--fail-on fail|warn` (default `fail`; use `warn` to also fail CI on
-  warnings).
+  `--shard INDEX/TOTAL`, `--check-timeout-secs SECS`,
+  `--retries N` (retry page-load failures with backoff, default 0),
+  `--max-load-ms MS` (fail forms slower than this via a synthetic `Load
+  budget` check), and `--fail-on fail|warn` (default `fail`; use `warn`
+  to also fail CI on warnings).
 - `test`/`monitor` additionally accept `--webhook-url URL` to push a
   regression notification (Slack or generic JSON) after the run, and
   `--github-issues-repo owner/repo` to auto-track regressions as GitHub
@@ -317,6 +430,10 @@ fail_on: fail               # or: warn — also fail CI on warnings
 audit_log: var/audit.jsonl
 baseline: .formwatch/baseline.json
 # serve_addr: 127.0.0.1:8080  # formwatch serve bind address
+# serve_api_token: SECRET     # or FORMWATCH_SERVE_API_TOKEN: guard serve data endpoints
+# watch_interval_secs: 300    # formwatch watch: seconds between cycles
+# retries: 2                  # retry page-load failures (FORMWATCH_RETRIES)
+# max_load_ms: 15000          # fail forms slower than this (FORMWATCH_MAX_LOAD_MS)
 # keep_last: 50               # formwatch prune: runs to keep per form
 accept_terms: true          # record acknowledgement of the legal notice
 notify:
@@ -369,9 +486,14 @@ formwatch --log-format json -v monitor forms.yml
 ```
 
 `--audit-log FILE` appends one JSON line per completed run — timestamp,
-URL, and per-check verdicts, deliberately **without** screenshots or other
-captured page content — giving you a PII-free activity trail separate from
-the richer history.
+URL, per-check verdicts, outcome tallies, actor/hostname, command,
+timing, and flags — deliberately **without** screenshots or other
+captured page content — giving you a PII-free activity trail separate
+from the richer history. Entries are hash-chained (each line carries
+`prev_hash` + `entry_hash`, SHA-256): `formwatch audit --verify`
+recomputes the chain, and `formwatch doctor` checks it too, so a
+deleted or edited line is detected instead of silently trusted.
+`formwatch audit --show N [--json]` prints the most recent entries.
 
 ## CI and pipeline integration
 
@@ -406,7 +528,13 @@ See `action.yml`'s `inputs:` for the full list (`submit`, `accept-terms`,
 `wait`, `checks-dir`, `history-dir`, `json`, `version`). It wraps the
 common cases, not every CLI flag — for anything else (LLM checks, a
 baseline, sharding, `--webhook-url`, ...), install the release binary
-directly and call it yourself.
+directly and call it yourself — or generate a workflow with
+`formwatch ci`, which validates the registry then monitors on push, PR,
+and a weekly schedule:
+
+```
+formwatch ci --forms forms.yml --schedule '0 8 * * 1'
+```
 `scripts/test-action-locally.sh` exercises the action's own logic
 (platform resolution, archive extraction, invocation) against a
 locally-built binary, without needing a real release — useful when
@@ -426,6 +554,9 @@ a CI job directly. For richer integration:
 - `report --prometheus --out formwatch.prom` emits Prometheus metrics
   (form/check gauges and last-run timestamps) for a scrape endpoint or a
   node_exporter textfile-collector directory.
+- `report --csv --out report.csv` (also on `test`/`monitor`) emits one
+  row per check (`form,url,check,status,baselined,timestamp,detail`)
+  for spreadsheets and line-based pipelines.
 - `--webhook-url` posts a regression notification after a run — a Slack
   incoming webhook gets `{ "text": ... }`, anything else gets a structured
   JSON payload. By default this fires only on regressions
@@ -547,7 +678,17 @@ curl localhost:8080/healthz     # 200 ok
 curl localhost:8080/readyz      # 200 ok, or 503 if the history dir isn't writable
 curl localhost:8080/metrics     # Prometheus text format
 curl localhost:8080/api/forms   # latest run of every form as JSON
+curl localhost:8080/api/summary # aggregate counts + worst status per form (JSON)
+curl localhost:8080/api/trends  # pass-rate + worst status per form (JSON)
+curl localhost:8080/api/flakes   # currently-flapping checks per form (JSON)
+curl localhost:8080/badge.svg    # fleet status badge (green/yellow/red SVG)
 ```
+
+Pass `--api-token SECRET` (or `serve_api_token:` /
+`FORMWATCH_SERVE_API_TOKEN`) to require
+`Authorization: Bearer SECRET` on every data endpoint (`/metrics`,
+`/api/*`, `/badge.svg`); `/healthz` and `/readyz` stay open so
+load-balancer and orchestrator probes keep working without a secret.
 
 It binds to `127.0.0.1` by default; set `--addr`, `serve_addr:`, or
 `FORMWATCH_SERVE_ADDR` to change that. Point a Prometheus scrape at
@@ -555,11 +696,42 @@ It binds to `127.0.0.1` by default; set `--addr`, `serve_addr:`, or
 `/readyz`, or a status page at `/api/forms`. It runs until interrupted
 (Ctrl-C).
 
-`/metrics` and `/api/forms` cache the loaded history for 2 seconds,
+`/metrics`, `/api/forms`, and `/api/summary` cache the loaded history for 2 seconds,
 shared across every connection the process handles — since a scrape
 interval is almost always shorter than how often `monitor` actually
 writes a new run, this avoids re-walking the whole history directory
 (and re-reading every form's latest run file) on every single poll.
+
+## Watch mode
+
+`formwatch watch` turns `monitor` into a watchdog: it launches one
+browser, then re-checks every configured form every `--interval-secs`
+seconds (default 300, also `watch_interval_secs:` /
+`FORMWATCH_WATCH_INTERVAL_SECS`) until Ctrl+C:
+
+```
+formwatch watch forms.yml --interval-secs 600
+```
+
+Each cycle is a full `monitor` pass — same concurrency, pacing, audit
+entries (`"command":"watch"`), webhook/GitHub-Issues notifications on
+*new* regressions, and baseline handling — and it saves history, so a
+`formwatch serve` pointed at the same history dir stays live while the
+watchdog runs. Output stays quiet by design: one summary line per cycle
+plus full detail only for runs breaching `--fail-on`. For machines,
+pass an export flag: `--json` prints one compact JSON object per cycle
+(valid JSONL — split on newlines, parse each line), while `--junit` /
+`--sarif` / `--csv` reuse the `monitor` renderers once per cycle
+(`--out` files are overwritten each pass, so they always hold the
+latest result). In that mode stdout carries only the artifact — the
+startup, error, and stop notes move to stderr — and the exit code still
+reflects breaches, so a wrapper script or a `--max-cycles` CI job can
+gate on it. A failed cycle
+(dead browser, unwritable history) is logged and retried next cycle
+rather than killing a days-long watch; Ctrl+C stops cleanly (exit 0),
+while `--max-cycles N` stops after N cycles and exits 1 on breaches for
+CI smoke runs (`formwatch watch forms.yml --max-cycles 2` checks the
+whole pipeline end to end without a browser test harness).
 
 ## Retention
 

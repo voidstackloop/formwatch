@@ -122,6 +122,33 @@ pub fn run(ctx: &Context) -> Vec<Check> {
                     format!("{} is not writable: {e}", path.display()),
                 )),
             }
+            // When a log already exists, verify its hash chain too: a
+            // tampered trail should fail `doctor` the same way an
+            // unwritable one does, before anyone relies on it.
+            if path.exists() {
+                match crate::audit::verify(path) {
+                    Ok(report) if report.ok => checks.push(check(
+                        "Audit chain",
+                        true,
+                        format!(
+                            "{} entrie(s) verify ({} v2, {} legacy)",
+                            report.entries, report.v2_entries, report.legacy_entries
+                        ),
+                    )),
+                    Ok(report) => checks.push(check(
+                        "Audit chain",
+                        false,
+                        report
+                            .reason
+                            .unwrap_or_else(|| "audit chain broken".to_string()),
+                    )),
+                    Err(e) => checks.push(check(
+                        "Audit chain",
+                        false,
+                        format!("could not verify {}: {e:#}", path.display()),
+                    )),
+                }
+            }
         }
         None => checks.push(check("Audit log", true, "not configured")),
     }

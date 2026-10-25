@@ -4,6 +4,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Advanced audit logging: entries are hash-chained (SHA-256 `prev_hash` /
+  `entry_hash`), carry actor/hostname, command, timing, flags, outcome
+  tallies, and the formwatch version — still with no screenshots or page
+  content. New `formwatch audit --verify` (exit 1 when broken) and
+  `formwatch audit --show N [--json]` commands inspect the trail, and
+  `formwatch doctor` now verifies the chain alongside writability.
+  Legacy v1 lines verify by content hash, so old logs chain forward.
+- CSV export: `test`/`monitor`/`report` accept `--csv` (one row per
+  check: `form,url,check,status,baselined,timestamp,detail`), baseline-aware
+  like JUnit/SARIF.
+- Service summary: `serve` exposes `GET /api/summary` (aggregate
+  pass/warn/fail counts plus per-form worst status) alongside
+  `/metrics` and `/api/forms`, under the same 2-second history cache.
+- Passive vulnerability scanning: four new built-in checks run with every
+  `test`/`monitor` invocation — insecure transport (HTTP page/action,
+  mixed content, passwords in cleartext), form data protection (GET with
+  sensitive fields, missing CSRF token, autocomplete, unsafe
+  `target=_blank`), security headers (CSP, framing, HSTS, nosniff,
+  Referrer-Policy), and information disclosure (verbose errors,
+  secret-looking comments). Fully passive (DOM + response headers only,
+  stable finding ids `FW-V001`–`FW-V015`); new `formwatch vuln <url>`
+  runs a vulnerabilities-only scan, and `--skip-vuln` opts back out.
+- Discovery and triage commands: `formwatch validate` lints registries
+  (bad YAML, missing names/URLs, non-HTTP(S) URLs, duplicates,
+  plain-http) with exit 1 on errors; `formwatch sitemap <sitemap.xml>`
+  lists candidate pages (following an index one level, `--check-forms`
+  keeps only pages containing a `<form>` with their action targets);
+  `formwatch trends [--last-n N]`, `formwatch flakes`, `formwatch diff`,
+  and `formwatch history` analyze recorded history (pass-rates, streaks,
+  flip-flopping checks, last-two-run changes); `formwatch export
+  --format jsonl|csv` dumps full history for warehouses and dashboards.
+- Reliability knobs: global `--retries N` (`retries:` /
+  `FORMWATCH_RETRIES`) retries page-load failures with backoff in
+  `test`/`monitor`/`watch`; `--max-load-ms MS` (`max_load_ms:` /
+  `FORMWATCH_MAX_LOAD_MS`) adds a synthetic `Load budget` check so slow
+  forms breach `--fail-on` like any other failure.
+- `serve` hardening and observability: `--api-token` (`serve_api_token:`
+  / `FORMWATCH_SERVE_API_TOKEN`) requires
+  `Authorization: Bearer <token>` on data endpoints while `/healthz` and
+  `/readyz` stay open; new `GET /api/trends` (pass-rate per form) and
+  `GET /badge.svg` (green/yellow/red fleet badge).
+- `report --markdown` renders one section per form with a check table for
+  issues and wikis; `formwatch ci` writes a starter GitHub Actions
+  workflow that validates then monitors.
+- Round two: `validate --probe` GETs each valid URL and reports
+  reachability; `sitemap` accepts a site root (robots.txt + `/sitemap.xml`),
+  detects indexes by content instead of URL, and resolves `../`, `./`, and
+  protocol-relative action URLs; `trends --min-pass-rate R` gates CI on
+  fleet health; `export --format json` adds a pretty-array option; `serve`
+  gains `GET /api/flakes` and a `nosniff` hardening header on every
+  response.
+- `formwatch watch`: continuous watchdog mode re-running `monitor`
+  passes on an interval (default 300s, `--interval-secs` /
+  `watch_interval_secs` / `FORMWATCH_WATCH_INTERVAL_SECS`), with
+  per-cycle summary lines, full detail only for breaching runs, the
+  same regression notifications and audit entries (`"command":"watch"`)
+  as `monitor`, retry-next-cycle on failed passes, clean Ctrl+C stops,
+  and  `--max-cycles` for bounded CI smoke runs. History stays fresh so
+  `serve` doubles as its live dashboard.
+
+### Fixed
+
+- Audit log stays verifiable under concurrent writers: the read-
+  hash-append sequence is now serialized with a cross-process lock
+  directory (stale locks from crashed holders are stolen after 60s),
+  so a cron `monitor` overlapping `watch` on one `--audit-log` can no
+  longer fork the hash chain. Previously both writers read the same
+  `prev_hash` and the second entry failed `audit --verify`.
+- Same-second history saves are atomic (`create_new` reservation
+  instead of exists-check-then-write), so concurrent runs can no
+  longer pick one filename and overwrite each other.
+- `%XX` decoding of URL query keys no longer corrupts multi-byte
+  UTF-8 (bytes are decoded as a unit via `from_utf8_lossy`). `monitor`'s pass logic is now
+  shared (`check_all_forms`), behavior unchanged. Export flags
+  (`--json` as one JSON object per cycle / JSONL, `--junit`/`--sarif`/
+  `--csv` per cycle, `--out` overwritten each pass) give `watch` a
+  machine-readable mode: stdout carries only the artifact while notes
+  go to stderr, and the exit code still reflects breaches.
+- Browser-stack header capture: the security-header, cookie, and
+disclosure checks now analyze the main document's response as the
+browser itself received it (CDP `Network.responseReceived` +
+`Network.getCookies` during page open — same TLS session, UA, and
+cookies), seeded into the shared header cache. Cookie flags come from
+the authoritative jar instead of parsed `Set-Cookie` text (HttpOnly
+cookies are invisible to any out-of-band fetch), and normal runs cost
+zero extra requests per form; the plain GET survives only as a fallback.
+- Hardened vulnerability scanning: a fifth `Cookie security` check
+  (`Secure`/`HttpOnly`/`SameSite`/prefix contracts, values never
+  stored), permissive-CSP and unsafe-Referrer-Policy detection, server
+  version-banner disclosure, sensitive page-URL query analysis, and
+  framework CSRF meta-tag awareness. Every finding now carries a CWE
+  and a confidence rating; the response-header fetch is shared and
+  cached (one GET per form); `vuln --min-severity` filters triage
+  noise (finding ids now `FW-V001`–`FW-V021`).
+
 ## [0.1.0] - 2026-09-29
 
 First release, with prebuilt binaries for Linux, macOS and Windows.

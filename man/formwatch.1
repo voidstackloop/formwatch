@@ -9,8 +9,8 @@ formwatch \- test public-service forms for broken flows, accessibility, mobile u
 drives a headless Chrome browser against a form, runs a set of checks
 (submission flow, accessibility via axe-core, mobile usability,
 validation errors, required documents, autofill hints, input persistence,
-and bot-protection detection), records the result, and reports what
-changed since the previous run.
+bot-protection detection, and passive vulnerability scanning), records
+the result, and reports what changed since the previous run.
 .PP
 .B Only point formwatch at forms you own or are explicitly authorized to
 test.
@@ -32,8 +32,49 @@ and --out.
 Run every form listed in one or more YAML configs. Supports --json,
 --junit, --sarif, --shard, and --out.
 .TP
-.B report \fR[\fB--html\fR|\fB--json\fR|\fB--junit\fR|\fB--sarif\fR|\fB--prometheus\fR] [\fB--out\fR \fIFILE\fR]
+.B watch \fIforms.yml\fR... [\fB--interval-secs\fR \fIN\fR] [\fB--max-cycles\fR \fIN\fR] [\fB--json\fR|\fB--junit\fR|\fB--sarif\fR|\fB--csv\fR] [\fB--out\fR \fIFILE\fR]
+Re-run monitor on a schedule (default every 300s) until Ctrl+C, printing
+a one-line summary per cycle and full detail only for breaching runs.
+With an export flag, stdout carries only the per-cycle artifact instead
+(--json emits one compact object per cycle, i.e. JSONL; --out files are
+overwritten each pass). Failed cycles are retried next cycle; Ctrl+C
+stops cleanly.
+.TP
+.B vuln \fIURL\fR [\fIOPTIONS\fR]
+Scan one form for common passive vulnerabilities only (insecure
+transport, form data protection, security headers, cookie security,
+information disclosure). No attack payloads are ever sent. Supports
+--json and --min-severity \fIlow\fR|\fImedium\fR|\fIhigh\fR|\fIcritical\fR.
+.TP
+.B report \fR[\fB--html\fR|\fB--json\fR|\fB--junit\fR|\fB--sarif\fR|\fB--prometheus\fR|\fB--markdown\fR] [\fB--out\fR \fIFILE\fR]
 Render the latest run of every known form.
+.TP
+.B validate \fR[\fIforms.yml\fR...] [\fB--probe\fR] [\fB--json\fR]
+Lint registries without launching a browser. Exits 1 on errors.
+With --probe, also GETs each valid URL and reports reachability.
+.TP
+.B trends \fR[\fB--last-n\fR \fIN\fR] [\fB--min-pass-rate\fR \fIR\fR] [\fB--json\fR]
+Pass-rate, current status, and streaks per form over history.
+--min-pass-rate exits 1 when any form falls below it.
+.TP
+.B flakes \fR[\fB--json\fR]
+Checks that keep flip-flopping (2+ transitions). Exits 1 when any exist.
+.TP
+.B diff \fITARGET\fR [\fB--json\fR]
+What changed between a form's last two runs (URL or display name).
+.TP
+.B history \fITARGET\fR [\fB--last-n\fR \fIN\fR] [\fB--json\fR]
+A form's recorded runs, newest last.
+.TP
+.B export \fR[\fB--format\fR \fIjsonl\fR|\fIjson\fR|\fIcsv\fR] [\fB--out\fR \fIFILE\fR]
+Dump full history (every run of every form).
+.TP
+.B sitemap \fIURL\fR [\fB--max-urls\fR \fIN\fR] [\fB--check-forms\fR] [\fB--json\fR]
+Discover candidate form pages from a sitemap URL or a site root
+(robots.txt plus /sitemap.xml).
+.TP
+.B ci \fR[\fB--forms\fR \fIFILE\fR] [\fB--schedule\fR \fICRON\fR] [\fB--out\fR \fIFILE\fR]
+Write a starter GitHub Actions workflow that validates then monitors.
 .TP
 .B legal
 Print the authorized-use notice.
@@ -51,9 +92,17 @@ Send one synthetic regression to verify a webhook is reachable.
 Generate a baseline of accepted findings from history (--write), or print
 the configured/current one.
 .TP
-.B serve \fR[\fB--addr\fR \fIHOST:PORT\fR]
-Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms)
-over the accumulated history. Binds to 127.0.0.1:8080 by default.
+.B serve \fR[\fB--addr\fR \fIHOST:PORT\fR] [\fB--api-token\fR \fITOKEN\fR]
+Serve read-only HTTP endpoints (/healthz, /readyz, /metrics, /api/forms,
+/api/summary, /api/trends, /api/flakes, /badge.svg) over the accumulated
+history.
+Binds to 127.0.0.1:8080 by default. With --api-token (or serve_api_token
+/ FORMWATCH_SERVE_API_TOKEN), data endpoints require
+Authorization: Bearer <token>; the probes stay open.
+.TP
+.B audit \fR[\fB--verify\fR] [\fB--show\fR \fIN\fR] [\fB--json\fR]
+Inspect the tamper-evident audit log: --verify recomputes its hash chain
+(exit 1 when broken), --show N prints the last N entries.
 .TP
 .B prune \fR(\fB--keep-last\fR \fIN\fR | \fB--keep-days\fR \fID\fR) [\fB--dry-run\fR]
 Delete old history runs, keeping the most recent ones.
@@ -99,12 +148,20 @@ JSON baseline of accepted findings; only new or worsened findings fail.
 .B --per-host-delay-ms \fIMS\fR / --max-concurrent \fIN\fR / --check-timeout-secs \fISECS\fR
 Pacing and timeout controls.
 .TP
+.B --retries \fIN\fR / --max-load-ms \fIMS\fR
+Retry page-load failures with backoff (default 0); fail forms slower
+than the load budget via a synthetic Load budget check.
+.TP
 .B --shard \fIINDEX/TOTAL\fR
 Check only a deterministic slice of the configured forms (e.g. 2/5), for
 splitting a large registry across CI jobs.
 .TP
 .B --fail-on \fIfail\fR|\fIwarn\fR
 Which status makes the process exit non-zero (default: fail).
+.TP
+.B --skip-vuln
+Skip the passive vulnerability checks (insecure transport, form data
+protection, security headers, information disclosure).
 .TP
 .B --llm
 Enable the optional LLM semantic checks of error and instruction wording.

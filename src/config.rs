@@ -143,6 +143,8 @@ pub struct Config {
     pub max_concurrent: Option<usize>,
     /// Deterministic shard selector for `monitor`, e.g. `2/5`.
     pub shard: Option<Shard>,
+    /// Seconds between `formwatch watch` cycles.
+    pub watch_interval_secs: Option<u64>,
     /// Base per-check timeout, in seconds.
     pub check_timeout_secs: Option<u64>,
     /// Whether non-Pass checks capture screenshots (`false` for
@@ -168,6 +170,12 @@ pub struct Config {
     pub accept_terms: Option<bool>,
     /// Which status makes the process exit non-zero (`fail` or `warn`).
     pub fail_on: Option<FailOn>,
+    /// Wall-clock budget per form in milliseconds (`max_load_ms`).
+    pub max_load_ms: Option<u64>,
+    /// How many times to retry a form whose page never loaded (`retries`).
+    pub retries: Option<u32>,
+    /// Bearer token guarding `serve`'s API/metrics endpoints (`serve_api_token`).
+    pub serve_api_token: Option<String>,
     /// Webhook notification settings.
     pub notify: Option<NotifyConfig>,
     /// Optional LLM semantic-check settings.
@@ -238,6 +246,11 @@ impl Config {
         set!(max_concurrent, "FORMWATCH_MAX_CONCURRENT", env_parse);
         set!(shard, "FORMWATCH_SHARD", env_parse);
         set!(
+            watch_interval_secs,
+            "FORMWATCH_WATCH_INTERVAL_SECS",
+            env_parse
+        );
+        set!(
             check_timeout_secs,
             "FORMWATCH_CHECK_TIMEOUT_SECS",
             env_parse
@@ -253,6 +266,8 @@ impl Config {
         set!(keep_days, "FORMWATCH_KEEP_DAYS", env_parse);
         set!(accept_terms, "FORMWATCH_ACCEPT_TERMS", env_bool);
         set!(fail_on, "FORMWATCH_FAIL_ON", env_fail_on);
+        set!(max_load_ms, "FORMWATCH_MAX_LOAD_MS", env_parse);
+        set!(retries, "FORMWATCH_RETRIES", env_parse);
 
         if let Some(url) = env_string(&get, "FORMWATCH_WEBHOOK_URL") {
             self.notify
@@ -302,6 +317,9 @@ impl Config {
         llm_set!(redact, "FORMWATCH_LLM_REDACT", env_bool);
         llm_set!(cache, "FORMWATCH_LLM_CACHE", env_bool);
         llm_set!(cache_dir, "FORMWATCH_LLM_CACHE_DIR", env_path);
+        if let Some(token) = env_string(&get, "FORMWATCH_SERVE_API_TOKEN") {
+            self.serve_api_token = Some(token);
+        }
         if let Some(provider) = env_string(&get, "FORMWATCH_LLM_PROVIDER") {
             let parsed = provider.parse::<Provider>().map_err(Error::Config)?;
             self.llm.get_or_insert_with(LlmConfig::default).provider = Some(parsed);

@@ -1,7 +1,12 @@
 use anyhow::{Context, Result};
 use chromiumoxide::browser::BrowserConfigBuilder;
+use chromiumoxide::cdp::browser_protocol::network::{
+    EnableParams, EventResponseReceived, GetCookiesParams, ResourceType,
+};
+use chromiumoxide::listeners::EventStream;
 use chromiumoxide::{Browser, BrowserConfig, BrowserFetcher, BrowserFetcherOptions, Page};
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
@@ -246,8 +251,50 @@ pub async fn open(browser: &Browser, url: &str) -> Result<Page> {
     open_with(browser, url, &OpenOptions::default()).await
 }
 
-/// [`open`], honoring custom retry count and backoff.
-pub async fn open_with(browser: &Browser, url: &str, opts: &OpenOptions) -> Result<Page> {
+/// One raw cookie as the browser's own jar reports it (via CDP
+/// `Network.getCookies`) — flags only, never values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedCookie {
+    /// Cookie name (values are never captured).
+    pub name: String,
+    /// `Secure` attribute present.
+    pub secure: bool,
+    /// `HttpOnly` attribute present.
+    pub httponly: bool,
+    /// `SameSite` attribute value as sent (`Strict`/`Lax`/`None`).
+    pub samesite: Option<String>,
+    /// `Path` attribute value as sent.
+    pub path: String,
+    /// `Domain` attribute value as sent.
+    pub domain: String,
+}
+
+/// The main document's response as the browser itself saw it: final URL,
+/// response headers, and jar cookies — captured over CDP during the page
+/// open, so header/cookie analysis runs against exactly what Chrome
+/// received (same TLS session, UA, and cookies), not what a second,
+/// look-different HTTP client would get.
+#[derive(Debug, Clone, Default)]
+pub struct CapturedDocument {
+    /// Final URL after redirects.
+    pub final_url: String,
+    /// Lowercased response header name -> value (first wins).
+    pub headers: HashMap<String, String>,
+    /// Every `Set-Cookie` value from the document response.
+    pub set_cookies: Vec<String>,
+    /// Jar cookies with flags only (values never captured).
+    pub cookies: Vec<CapturedCookie>,
+}
+
+/// [`open`], also returning the main document's response as the browser
+/// saw it (headers + cookie flags via CDP). The capture is `None` when
+/// it failed or there was nothing to capture — callers fall back to a
+/// plain header fetch instead of losing the run.
+pub async fn open_with_capture(
+    browser: &Browser,
+    url: &str,
+    opts: &OpenOptions,
+) -> Result<(Page, Option<CapturedDocument>)> {
     let attempts = opts.attempts.max(1);
     let mut last_err = None;
     for attempt in 0..attempts {
@@ -268,11 +315,23 @@ pub async fn open_with(browser: &Browser, url: &str, opts: &OpenOptions) -> Resu
     Err(last_err.expect("loop runs at least once, always setting last_err on failure"))
 }
 
-async fn open_once(browser: &Browser, url: &str) -> Result<Page> {
+/// [`open`], honoring custom retry count and backoff.
+pub async fn open_with(browser: &Browser, url: &str, opts: &OpenOptions) -> Result<Page> {
+    Ok(open_with_capture(browser, url, opts).await?.0)
+}
+
+async fn open_once(browser: &Browser, url: &str) -> Result<(Page, Option<CapturedDocument>)> {
+    // A blank page first so the Network listener below is attached
+    // *before* the real navigation — subscribing after `new_page(url)`
+    // would already have missed the document's response.
     let page = browser
-        .new_page(url)
+        .new_page("about:blank")
         .await
         .with_context(|| format!("failed to open {url}"))?;
+    let capture = NetworkCapture::start(&page).await;
+    if let Err(e) = page.goto(url).await {
+        tracing::debug!(url, error = %e, "goto returned early, still waiting for navigation");
+    }
     page.wait_for_navigation()
         .await
         .with_context(|| format!("navigation to {url} never finished"))?;
@@ -289,7 +348,126 @@ async fn open_once(browser: &Browser, url: &str) -> Result<Page> {
             "{url} failed to load (landed on {landed_on} — unreachable, DNS failure, connection refused, or a blocked port)"
         );
     }
-    Ok(page)
+    let captured = match capture {
+        Some(capture) => capture.finish(&page, &landed_on).await,
+        None => None,
+    };
+    Ok((page, captured))
+}
+
+/// Best-effort CDP capture of the document response. Every step is
+/// optional: if enabling Network, subscribing, or reading cookies fails,
+/// the page itself still loaded fine and callers fall back to a plain
+/// header fetch instead.
+struct NetworkCapture {
+    listener: EventStream<EventResponseReceived>,
+}
+
+impl NetworkCapture {
+    async fn start(page: &Page) -> Option<Self> {
+        if page.execute(EnableParams::builder().build()).await.is_err() {
+            return None;
+        }
+        match page.event_listener::<EventResponseReceived>().await {
+            Ok(listener) => Some(Self { listener }),
+            Err(e) => {
+                tracing::debug!(error = %e, "Network event subscription failed; header checks will refetch");
+                None
+            }
+        }
+    }
+
+    /// Drains document responses seen during the load and keeps the one
+    /// for the final URL (last document response as fallback), plus the
+    /// browser's jar cookies.
+    async fn finish(mut self, page: &Page, landed_on: &str) -> Option<CapturedDocument> {
+        let mut documents = Vec::new();
+        // The main document's response precedes load completion, but
+        // delivery to this listener can lag a tick behind navigation —
+        // drain whatever is already queued, then stop at the first
+        // quiet poll instead of waiting out the clock.
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(100), self.listener.next()).await {
+                Ok(Some(event)) => {
+                    if event.r#type == ResourceType::Document {
+                        documents.push(event.response.clone());
+                    }
+                }
+                _ => break,
+            }
+        }
+        let response = documents
+            .iter()
+            .rev()
+            .find(|r| r.url == landed_on)
+            .or_else(|| documents.last())?;
+        let mut headers = HashMap::new();
+        let mut set_cookies = Vec::new();
+        if let Some(obj) = response.headers.inner().as_object() {
+            for (name, value) in obj {
+                push_header_values(&mut headers, &mut set_cookies, &name.to_lowercase(), value);
+            }
+        }
+        let cookies = page
+            .execute(GetCookiesParams::builder().build())
+            .await
+            .map(|r| {
+                r.result
+                    .cookies
+                    .into_iter()
+                    .map(|c| CapturedCookie {
+                        name: c.name,
+                        secure: c.secure,
+                        httponly: c.http_only,
+                        samesite: c.same_site.map(|s| s.as_ref().to_string()),
+                        path: c.path,
+                        domain: c.domain,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(CapturedDocument {
+            final_url: response.url.clone(),
+            headers,
+            set_cookies,
+            cookies,
+        })
+    }
+}
+
+/// Folds one CDP header value into the map, keeping every `Set-Cookie`
+/// separately (Chromium hands repeats as one JSON array or as several
+/// values — both occur in the wild). First value wins for ordinary
+/// headers.
+fn push_header_values(
+    headers: &mut HashMap<String, String>,
+    set_cookies: &mut Vec<String>,
+    key: &str,
+    value: &serde_json::Value,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            if key == "set-cookie" {
+                set_cookies.push(s.clone());
+            }
+            headers.entry(key.to_string()).or_insert_with(|| s.clone());
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter().filter_map(|v| v.as_str()) {
+                if key == "set-cookie" {
+                    set_cookies.push(item.to_string());
+                }
+                headers
+                    .entry(key.to_string())
+                    .or_insert_with(|| item.to_string());
+            }
+        }
+        other => {
+            headers
+                .entry(key.to_string())
+                .or_insert_with(|| other.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,5 +522,40 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn fold(pairs: &[(&str, serde_json::Value)]) -> (HashMap<String, String>, Vec<String>) {
+        let mut headers = HashMap::new();
+        let mut set_cookies = Vec::new();
+        for (k, v) in pairs {
+            push_header_values(&mut headers, &mut set_cookies, k, v);
+        }
+        (headers, set_cookies)
+    }
+
+    #[test]
+    fn header_capture_keeps_every_set_cookie_and_first_wins_otherwise() {
+        // Chromium hands repeats as one JSON array or as several values —
+        // both occur in the wild, and both must preserve every cookie
+        // while ordinary headers keep their first value.
+        let (headers, set_cookies) = fold(&[
+            (
+                "content-security-policy",
+                serde_json::json!("default-src 'self'"),
+            ),
+            (
+                "set-cookie",
+                serde_json::json!(["a=1; Secure", "b=2; HttpOnly"]),
+            ),
+            ("set-cookie", serde_json::json!("c=3; Path=/")),
+            ("x-powered-by", serde_json::json!("PHP/8.1")),
+            ("x-powered-by", serde_json::json!("PHP/9.9")),
+        ]);
+        assert_eq!(
+            set_cookies,
+            vec!["a=1; Secure", "b=2; HttpOnly", "c=3; Path=/"]
+        );
+        assert_eq!(headers["content-security-policy"], "default-src 'self'");
+        assert_eq!(headers["x-powered-by"], "PHP/8.1");
     }
 }
